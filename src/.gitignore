@@ -1,0 +1,10 @@
+# Arquivos compilados do Java
+bin/
+*.class
+
+# Arquivo de save (para não compartilhar seus dados)
+study_data.properties
+
+# Arquivos temporários de editores
+.LCK*
+*~
