@@ -36,9 +36,10 @@ public class StudyTracker extends JFrame {
     private int     countdownSecondsRemaining = 0;
     private boolean wasFocusSession = false;
     private int     plannedMinutes  = 0;
+    private boolean isPaused        = false;
     private JLabel  countdownLabel, statusLabel;
     private JSpinner focusSpinner, breakSpinner;
-    private StyledButton startFocusButton, startBreakButton, stopCountdownButton;
+    private StyledButton startFocusButton, startBreakButton, stopCountdownButton, resetButton;
 
     // --- Manual ---
     private JTextField hoursField, minutesField;
@@ -164,14 +165,12 @@ public class StudyTracker extends JFrame {
 
         card.add(buildSubjectRow(), BorderLayout.NORTH);
 
-        // Tabs
-        JTabbedPane tabs = new JTabbedPane();
-        tabs.setFont(AppTheme.FONT_LABEL);
-        tabs.setBackground(AppTheme.SURFACE);
-        tabs.addTab("⏱  Cronômetro",         buildStopwatchTab());
-        tabs.addTab("✏  Adicionar Manual",   buildManualTab());
-        tabs.addTab("🍅  Pomodoro",           buildPomodoroTab());
-        tabs.setPreferredSize(new Dimension(0, 130));
+        // Tabs customizadas (sem fundo branco do JTabbedPane)
+        CustomTabs tabs = new CustomTabs();
+        tabs.addTab("⏱  Cronômetro",       buildStopwatchTab());
+        tabs.addTab("✏  Manual",           buildManualTab());
+        tabs.addTab("🍅  Pomodoro",         buildPomodoroTab());
+        tabs.setPreferredSize(new Dimension(0, 175));
         card.add(tabs, BorderLayout.CENTER);
 
         card.add(buildManagementRow(), BorderLayout.SOUTH);
@@ -299,37 +298,56 @@ public class StudyTracker extends JFrame {
         top.add(Box.createHorizontalStrut(16));
         top.add(lbl("Pausa (min):")); top.add(breakSpinner);
 
-        JPanel mid = new JPanel(new BorderLayout(0, 0));
-        mid.setBackground(AppTheme.SURFACE);
-
-        countdownLabel = new JLabel("25:00", SwingConstants.CENTER);
-        countdownLabel.setFont(AppTheme.FONT_TIMER_S);
-        countdownLabel.setForeground(AppTheme.TEXT_PRI);
+        // Layout vertical centralizado: status | countdown | botões
+        JPanel mid = new JPanel();
+        mid.setLayout(new BoxLayout(mid, BoxLayout.Y_AXIS));
+        mid.setOpaque(false);
 
         statusLabel = new JLabel("Pronto para iniciar", SwingConstants.CENTER);
         statusLabel.setFont(AppTheme.FONT_SMALL);
         statusLabel.setForeground(AppTheme.ACCENT);
+        statusLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
 
-        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.CENTER, 10, 4));
-        buttons.setBackground(AppTheme.SURFACE);
-        startFocusButton    = new StyledButton("Foco",    StyledButton.Variant.FILLED);
-        startBreakButton    = new StyledButton("Pausa",   StyledButton.Variant.TONAL);
-        stopCountdownButton = new StyledButton("Resetar", StyledButton.Variant.OUTLINED);
+        countdownLabel = new JLabel("25:00", SwingConstants.CENTER);
+        countdownLabel.setFont(AppTheme.FONT_TIMER_S);
+        countdownLabel.setForeground(AppTheme.TEXT_PRI);
+        countdownLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
+
+        // Foco: inicia sessão de foco
+        startFocusButton    = new StyledButton("▶ Foco",   StyledButton.Variant.FILLED);
+        // Descanso: inicia pausa/descanso
+        startBreakButton    = new StyledButton("☕ Descanso", StyledButton.Variant.TONAL);
+        // Pausar/Retomar: pausa e retoma o timer atual
+        stopCountdownButton = new StyledButton("⏸ Pausar", StyledButton.Variant.OUTLINED);
+        // Resetar: cancela tudo
+        resetButton         = new StyledButton("↺ Resetar", StyledButton.Variant.TEXT);
+
         stopCountdownButton.setEnabled(false);
+        resetButton.setEnabled(false);
+        // Descanso sempre disponível, não depende de ter rodado Foco antes
+        startBreakButton.setEnabled(true);
+
         startFocusButton.addActionListener(e    -> startCountdown(true));
         startBreakButton.addActionListener(e    -> startCountdown(false));
-        stopCountdownButton.addActionListener(e -> stopCountdown(false));
-        buttons.add(startFocusButton); buttons.add(startBreakButton); buttons.add(stopCountdownButton);
+        stopCountdownButton.addActionListener(e -> togglePauseCountdown());
+        resetButton.addActionListener(e         -> stopCountdown(false));
 
-        JPanel center = new JPanel(new GridLayout(2, 1, 0, 0));
-        center.setBackground(AppTheme.SURFACE);
-        center.add(countdownLabel); center.add(statusLabel);
+        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.CENTER, 8, 0));
+        buttons.setOpaque(false);
+        buttons.add(startFocusButton);
+        buttons.add(startBreakButton);
+        buttons.add(stopCountdownButton);
+        buttons.add(resetButton);
+        buttons.setAlignmentX(Component.CENTER_ALIGNMENT);
 
-        mid.add(center,  BorderLayout.CENTER);
-        mid.add(buttons, BorderLayout.SOUTH);
+        mid.add(Box.createVerticalStrut(2));
+        mid.add(statusLabel);
+        mid.add(countdownLabel);
+        mid.add(Box.createVerticalStrut(4));
+        mid.add(buttons);
 
-        p.add(top, BorderLayout.NORTH);
-        p.add(mid, BorderLayout.CENTER);
+        p.add(top,    BorderLayout.NORTH);
+        p.add(mid,    BorderLayout.CENTER);
         return p;
     }
 
@@ -406,15 +424,24 @@ public class StudyTracker extends JFrame {
     private void startCountdown(boolean isFocus) {
         String subject = (String) subjectComboBox.getSelectedItem();
         if (isFocus && subject == null) { toast("Selecione uma matéria!"); return; }
+        if (countdownTimer != null) countdownTimer.stop(); // garante parado antes de reiniciar
+        isPaused = false;
         wasFocusSession = isFocus;
-        plannedMinutes  = isFocus ? (int) focusSpinner.getValue() : (int) breakSpinner.getValue();
+        plannedMinutes  = isFocus
+                ? (int) focusSpinner.getValue()
+                : (int) breakSpinner.getValue();
         countdownSecondsRemaining = plannedMinutes * 60;
         statusLabel.setText(isFocus ? "Focando em " + subject + "…" : "Em pausa…");
         statusLabel.setForeground(isFocus ? AppTheme.SUCCESS : AppTheme.ACCENT);
         updateCountdownLabel();
+        isPaused = false;
         countdownTimer.start();
-        startFocusButton.setEnabled(false); startBreakButton.setEnabled(false);
-        stopCountdownButton.setEnabled(true); subjectComboBox.setEnabled(false);
+        startFocusButton.setEnabled(false);
+        startBreakButton.setEnabled(false);
+        stopCountdownButton.setEnabled(true);
+        stopCountdownButton.setText("⏸ Pausar");
+        resetButton.setEnabled(true);
+        subjectComboBox.setEnabled(false);
     }
 
     private void stopCountdown(boolean finished) {
@@ -432,8 +459,31 @@ public class StudyTracker extends JFrame {
         statusLabel.setText("Pronto para iniciar"); statusLabel.setForeground(AppTheme.ACCENT);
         countdownSecondsRemaining = (int) focusSpinner.getValue() * 60;
         updateCountdownLabel();
+        isPaused = false;
         startFocusButton.setEnabled(true); startBreakButton.setEnabled(true);
-        stopCountdownButton.setEnabled(false); subjectComboBox.setEnabled(true);
+        stopCountdownButton.setEnabled(false);
+        stopCountdownButton.setText("⏸ Pausar");
+        resetButton.setEnabled(false);
+        subjectComboBox.setEnabled(true);
+    }
+
+    private void togglePauseCountdown() {
+        if (isPaused) {
+            // Retomar
+            isPaused = false;
+            countdownTimer.start();
+            stopCountdownButton.setText("⏸ Pausar");
+            statusLabel.setText(wasFocusSession
+                    ? "Focando em " + subjectComboBox.getSelectedItem() + "…"
+                    : "Em pausa…");
+        } else {
+            // Pausar
+            isPaused = true;
+            countdownTimer.stop();
+            stopCountdownButton.setText("▶ Retomar");
+            statusLabel.setText("⏸ Pausado");
+            statusLabel.setForeground(AppTheme.WARNING);
+        }
     }
 
     private void updateCountdownLabel() {
@@ -556,20 +606,41 @@ public class StudyTracker extends JFrame {
 
     // ── TEMA ────────────────────────────────────────────────────────────────
 
-    private boolean darkMode = false;
     private void toggleTheme() {
-        darkMode = !darkMode;
-        Color bg   = darkMode ? new Color(0x0F1120) : new Color(0xF4F6FB);
-        Color surf = darkMode ? new Color(0x1A1D2E) : Color.WHITE;
-        AppTheme.BG.equals(bg); // não altera constante — seria refactor maior
-        // Solução prática: JOptionPane para escolher via LookAndFeel
-        try {
-            String laf = darkMode
-                    ? "javax.swing.plaf.nimbus.NimbusLookAndFeel"
-                    : UIManager.getSystemLookAndFeelClassName();
-            UIManager.setLookAndFeel(laf);
-            SwingUtilities.updateComponentTreeUI(this);
-        } catch (Exception ex) { /* ignora */ }
+        String[] options = {"☀  Claro", "🌙  Escuro"};
+        int current = AppTheme.dark ? 1 : 0;
+        int choice = JOptionPane.showOptionDialog(this,
+                "Escolha o tema da interface:",
+                "Tema",
+                JOptionPane.DEFAULT_OPTION,
+                JOptionPane.PLAIN_MESSAGE,
+                null, options, options[current]);
+        if (choice < 0) return;
+        if (choice == 0) AppTheme.applyLight();
+        else             AppTheme.applyDark();
+        rebuildUI();
+    }
+
+    private void rebuildUI() {
+        // Salva estado dos timers
+        boolean swRunning = stopwatch != null && stopwatch.isRunning();
+        boolean cdRunning = countdownTimer != null && countdownTimer.isRunning();
+        if (swRunning) stopwatch.stop();
+        if (cdRunning) countdownTimer.stop();
+
+        getContentPane().removeAll();
+        getContentPane().setBackground(AppTheme.BG);
+        buildUI();
+
+        // Reconecta listeners e restaura estado
+        setupTimers();
+        if (swRunning) stopwatch.start();
+        if (cdRunning) countdownTimer.start();
+
+        refreshCombo();
+        updateUI();
+        revalidate();
+        repaint();
     }
 
     // ── UPDATE UI ───────────────────────────────────────────────────────────
@@ -647,6 +718,7 @@ public class StudyTracker extends JFrame {
         studyDataMap.forEach((k, v) -> p.setProperty(k, v.getMinutes() + "," + v.getColor().getRGB()));
         goals.forEach((k, v) -> p.setProperty("goal_" + k, String.valueOf(v)));
         try (FileOutputStream out = new FileOutputStream(SAVE_FILE)) {
+            p.setProperty("__theme__", AppTheme.dark ? "dark" : "light");
             p.store(out, "FocaEstudo Data");
         } catch (IOException e) { e.printStackTrace(); }
     }
@@ -656,6 +728,11 @@ public class StudyTracker extends JFrame {
         try (FileInputStream in = new FileInputStream(SAVE_FILE)) {
             p.load(in);
             for (String k : p.stringPropertyNames()) {
+                if (k.equals("__theme__")) {
+                    if ("dark".equals(p.getProperty(k))) AppTheme.applyDark();
+                    else AppTheme.applyLight();
+                    continue;
+                }
                 if (k.startsWith("goal_")) {
                     try { goals.put(k.substring(5), Integer.parseInt(p.getProperty(k))); } catch (Exception ignored) {}
                     continue;
