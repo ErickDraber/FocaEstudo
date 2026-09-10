@@ -99,6 +99,18 @@ public class StudyTracker extends JFrame {
     private JComboBox<String> kindCombo;
     private static final String[] KIND_LABELS = {"–", "Teoria", "Exercícios", "Revisão", "Outro"};
     private static final String[] KIND_KEYS   = {"", "teoria", "exercicios", "revisao", "outro"};
+    private static final String KIND_MANAGE = "＋ gerenciar sub-focos…";
+
+    // Sub-focos por área: tópicos / grupos musculares / hobbies. Ordem preservada.
+    private final Map<String, java.util.List<String>> subFocos = new LinkedHashMap<>();
+
+    private static String[] subFocoPreset(String type) {
+        switch (type) {
+            case "fisico": return new String[]{"Peito", "Costas", "Perna", "Ombro", "Braço", "Core", "Cardio"};
+            case "estudo": return new String[]{"Teoria", "Exercícios", "Revisão"};
+            default:       return new String[0];
+        }
+    }
 
     // --- Áreas: tipo de cada área ("estudo"|"fisico"|"lazer"|"trabalho"|"outro"). Ausente = "estudo". ---
     private final Map<String, String> areaType = new LinkedHashMap<>();
@@ -401,7 +413,7 @@ public class StudyTracker extends JFrame {
         subjectComboBox = new JComboBox<>();
         styleInput(subjectComboBox);
         subjectComboBox.setPreferredSize(new Dimension(220, 32));
-        subjectComboBox.addActionListener(e -> { updateGoalProgress(); refreshProgressCard(); });
+        subjectComboBox.addActionListener(e -> { updateGoalProgress(); refreshProgressCard(); refreshKindCombo(); });
         left.add(lbl); left.add(subjectComboBox);
 
         StyledButton btnGoal = new StyledButton("Meta", StyledButton.Variant.TEXT);
@@ -421,9 +433,17 @@ public class StudyTracker extends JFrame {
         noteField.setToolTipText("Opcional: o que você estudou nesta sessão (vai para o Histórico)");
         JLabel kindLbl = new JLabel("Tipo:");
         kindLbl.setFont(AppTheme.FONT_BOLD); kindLbl.setForeground(AppTheme.TEXT_PRI);
-        kindCombo = new JComboBox<>(KIND_LABELS);
+        kindCombo = new JComboBox<>();
         styleInput(kindCombo);
-        kindCombo.setToolTipText("Tipo de atividade desta sessão");
+        kindCombo.setToolTipText("Sub-foco desta sessão (tópico / grupo muscular / hobby)");
+        kindCombo.addActionListener(e -> {
+            if (KIND_MANAGE.equals(kindCombo.getSelectedItem())) {
+                String a = (String) subjectComboBox.getSelectedItem();
+                if (a != null) showSubFocosDialog(a);
+                kindCombo.setSelectedIndex(0);
+            }
+        });
+        kindLbl.setText("Sub-foco:");
         noteRow.add(noteLbl); noteRow.add(noteField);
         noteRow.add(Box.createHorizontalStrut(6));
         noteRow.add(kindLbl); noteRow.add(kindCombo);
@@ -1472,11 +1492,15 @@ public class StudyTracker extends JFrame {
         int beforeToday = minutesOnDay(subject, today);
 
         String note = noteField == null ? "" : noteField.getText().trim();
-        String kind = kindCombo == null ? "" : KIND_KEYS[Math.max(0, kindCombo.getSelectedIndex())];
+        String kind = "";
+        if (kindCombo != null) {
+            Object sel = kindCombo.getSelectedItem();
+            if (sel != null && !"–".equals(sel) && !KIND_MANAGE.equals(sel)) kind = sel.toString();
+        }
         studyDataMap.get(subject).addMinutes(minutes);
         sessions.add(new StudySession(subject, minutes, System.currentTimeMillis(), type, note, kind));
         if (noteField != null) noteField.setText("");
-        if (kindCombo != null) kindCombo.setSelectedIndex(0);
+        if (kindCombo != null && kindCombo.getItemCount() > 0) kindCombo.setSelectedIndex(0);
         updateUI();
         saveData(); saveSessions();
 
@@ -2068,6 +2092,7 @@ public class StudyTracker extends JFrame {
         if (goalDays.containsKey(old))   { goalDays.put(nw, goalDays.remove(old)); }
         if (archived.remove(old))        { archived.add(nw); }
         if (areaType.containsKey(old))   { areaType.put(nw, areaType.remove(old)); }
+        if (subFocos.containsKey(old))   { subFocos.put(nw, subFocos.remove(old)); }
         for (ChecklistItem it : checklist) if (it.subject.equals(old)) it.subject = nw;
         if (examDate.containsKey(old))   { examDate.put(nw, examDate.remove(old)); }
         refreshCombo(); subjectComboBox.setSelectedItem(nw); saveChecklist(); updateUI();
@@ -2108,7 +2133,7 @@ public class StudyTracker extends JFrame {
     private void deleteSubject() {
         String s = (String) subjectComboBox.getSelectedItem(); if (s == null) return;
         int r = JOptionPane.showConfirmDialog(this, "Deletar \"" + s + "\"? Todo o tempo será perdido.", "Deletar Matéria", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
-        if (r == JOptionPane.YES_OPTION) { studyDataMap.remove(s); goals.remove(s); goalsWeek.remove(s); goalsMonth.remove(s); streakBest.remove(s); goalDays.remove(s); examDate.remove(s); archived.remove(s); areaType.remove(s); checklist.removeIf(it -> it.subject.equals(s)); saveChecklist(); refreshCombo(); updateUI(); }
+        if (r == JOptionPane.YES_OPTION) { studyDataMap.remove(s); goals.remove(s); goalsWeek.remove(s); goalsMonth.remove(s); streakBest.remove(s); goalDays.remove(s); examDate.remove(s); archived.remove(s); areaType.remove(s); subFocos.remove(s); checklist.removeIf(it -> it.subject.equals(s)); saveChecklist(); refreshCombo(); updateUI(); }
     }
 
     // ── HISTÓRICO ───────────────────────────────────────────────────────────
@@ -2213,7 +2238,7 @@ public class StudyTracker extends JFrame {
         studyDataMap.clear(); sessions.clear(); checklist.clear();
         goals.clear(); goalsWeek.clear(); goalsMonth.clear();
         goalDays.clear(); examDate.clear(); archived.clear();
-        areaType.clear(); typeGoalWeek.clear();
+        areaType.clear(); typeGoalWeek.clear(); subFocos.clear();
         streakBest.clear(); unknownProps.clear();
         streakBestGeneral = 0; celebratedStreakMilestone = 0;
         loadData();
@@ -2409,6 +2434,66 @@ public class StudyTracker extends JFrame {
         for (String s : studyDataMap.keySet())
             if (!archived.contains(s)) subjectComboBox.addItem(s);
         if (sel != null && !archived.contains(sel)) subjectComboBox.setSelectedItem(sel);
+        refreshKindCombo();
+    }
+
+    /** Popula o combo de sub-foco com os sub-focos da área ativa. */
+    private void refreshKindCombo() {
+        if (kindCombo == null) return;
+        String area = (String) subjectComboBox.getSelectedItem();
+        ActionListener[] ls = kindCombo.getActionListeners();
+        for (ActionListener l : ls) kindCombo.removeActionListener(l);
+        kindCombo.removeAllItems();
+        kindCombo.addItem("–");
+        if (area != null)
+            for (String sf : subFocos.getOrDefault(area, java.util.Collections.emptyList())) kindCombo.addItem(sf);
+        kindCombo.addItem(KIND_MANAGE);
+        kindCombo.setSelectedIndex(0);
+        for (ActionListener l : ls) kindCombo.addActionListener(l);
+    }
+
+    /** Diálogo para editar os sub-focos de uma área (um por linha). */
+    private void showSubFocosDialog(String area) {
+        String tipo = typeOf(area);
+        java.util.List<String> atuais = subFocos.getOrDefault(area, new ArrayList<>());
+        JTextArea ta = new JTextArea(String.join("\n", atuais), 8, 22);
+        ta.setFont(AppTheme.FONT_LABEL);
+
+        JButton preset = new JButton("Usar sugestões de " + typeLabel(tipo));
+        preset.setFont(AppTheme.FONT_SMALL);
+        preset.setFocusPainted(false);
+        preset.setEnabled(subFocoPreset(tipo).length > 0);
+        preset.addActionListener(e -> {
+            java.util.LinkedHashSet<String> set = new java.util.LinkedHashSet<>();
+            for (String s : ta.getText().split("\n")) if (!s.trim().isEmpty()) set.add(s.trim());
+            java.util.Collections.addAll(set, subFocoPreset(tipo));
+            ta.setText(String.join("\n", set));
+        });
+
+        JPanel panel = new JPanel(new BorderLayout(0, 8));
+        JLabel h = dlgLabel("Sub-focos de \"" + area + "\" — um por linha", true);
+        panel.add(h, BorderLayout.NORTH);
+        panel.add(new JScrollPane(ta), BorderLayout.CENTER);
+        JPanel south = new JPanel(new BorderLayout());
+        south.add(dlgHint("Ex.: tópicos da prova, grupos musculares, hobbies."), BorderLayout.NORTH);
+        JPanel pr = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 4)); pr.add(preset);
+        south.add(pr, BorderLayout.SOUTH);
+        panel.add(south, BorderLayout.SOUTH);
+
+        int r = JOptionPane.showConfirmDialog(this, panel, "Sub-focos",
+                JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+        if (r != JOptionPane.OK_OPTION) return;
+
+        java.util.List<String> nova = new ArrayList<>();
+        java.util.Set<String> vistos = new java.util.HashSet<>();
+        for (String line : ta.getText().split("\n")) {
+            String v = line.replace('|', '/').trim();
+            if (!v.isEmpty() && vistos.add(v.toLowerCase())) nova.add(v);
+        }
+        if (nova.isEmpty()) subFocos.remove(area); else subFocos.put(area, nova);
+        saveData();
+        refreshKindCombo();
+        toast("Sub-focos de \"" + area + "\" atualizados.");
     }
 
     // ── PERSISTÊNCIA ────────────────────────────────────────────────────────
@@ -2435,6 +2520,7 @@ public class StudyTracker extends JFrame {
         examDate.forEach((k, dt) -> p.setProperty("exam_" + k, dt.toString())); // ISO yyyy-MM-dd
         areaType.forEach((k, v) -> { if (!"estudo".equals(v)) p.setProperty("type_" + k, v); });
         typeGoalWeek.forEach((k, v) -> { if (v > 0) p.setProperty("typegoalw_" + k, String.valueOf(v)); });
+        subFocos.forEach((k, list) -> { if (!list.isEmpty()) p.setProperty("subfocos_" + k, String.join(",", list)); });
         if (balanceNudgeWeek != null) p.setProperty("__balance_nudge_week__", balanceNudgeWeek);
         if (!archived.isEmpty()) p.setProperty("__archived__", String.join(",", archived));
         streakBest.forEach((k, v) -> p.setProperty("streakbest_" + k, String.valueOf(v)));
@@ -2560,6 +2646,12 @@ public class StudyTracker extends JFrame {
                 }
                 if (k.startsWith("typegoalw_")) {
                     try { typeGoalWeek.put(k.substring(10), Integer.parseInt(p.getProperty(k))); } catch (Exception ignored) {}
+                    continue;
+                }
+                if (k.startsWith("subfocos_")) {
+                    java.util.List<String> l = new ArrayList<>();
+                    for (String v : p.getProperty(k).split(",")) if (!v.trim().isEmpty()) l.add(v.trim());
+                    if (!l.isEmpty()) subFocos.put(k.substring(9), l);
                     continue;
                 }
                 if (k.startsWith("type_")) {

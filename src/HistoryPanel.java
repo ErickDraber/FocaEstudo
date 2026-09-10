@@ -209,9 +209,7 @@ public class HistoryPanel extends JDialog {
         SimpleDateFormat sdf = new SimpleDateFormat("dd/MM/yyyy HH:mm");
         JTextField fDate = new JTextField(sdf.format(new Date(s.getTimestamp())), 14);
         JTextField fNote = new JTextField(s.getNote(), 18);
-        String[] kKeys = {"", "teoria", "exercicios", "revisao", "outro"};
-        JComboBox<String> cbKind = new JComboBox<>(new String[]{"–", "Teoria", "Exercícios", "Revisão", "Outro"});
-        for (int i = 0; i < kKeys.length; i++) if (kKeys[i].equals(s.getKind())) cbKind.setSelectedIndex(i);
+        JTextField fKind = new JTextField(kindLabel(s.getKind()), 18);
 
         JPanel form = new JPanel(new GridBagLayout());
         GridBagConstraints c = new GridBagConstraints();
@@ -223,7 +221,7 @@ public class HistoryPanel extends JDialog {
         addRow(form, c, row++, "Duração:", hm);
         addRow(form, c, row++, "Data/hora:", fDate);
         addRow(form, c, row++, "Nota:", fNote);
-        addRow(form, c, row++, "Tipo:", cbKind);
+        addRow(form, c, row++, "Sub-foco:", fKind);
 
         int r = JOptionPane.showConfirmDialog(this, form, "Editar sessão",
                 JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
@@ -239,7 +237,7 @@ public class HistoryPanel extends JDialog {
         int idx = sessions.indexOf(s);
         if (idx < 0) return;
         StudySession ns = new StudySession(newSubj, newMin, newTs, s.getType(),
-                fNote.getText().trim(), kKeys[Math.max(0, cbKind.getSelectedIndex())]);
+                fNote.getText().trim(), fKind.getText().trim());
         sessions.set(idx, ns);
 
         // ajusta totais das matérias

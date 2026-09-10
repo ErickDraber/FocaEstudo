@@ -96,15 +96,23 @@ public class StatsPanel extends JDialog {
 
     private JComponent kindChart() {
         LinkedHashMap<String, Integer> map = new LinkedHashMap<>();
-        for (String k : new String[]{"teoria", "exercicios", "revisao", "outro", ""}) map.put(k, 0);
-        for (StudySession s : sessions) map.merge(s.getKind(), s.getMinutes(), Integer::sum);
-        String[] nomes = new String[map.size()];
-        int[] mins = new int[map.size()];
-        int i = 0;
-        for (Map.Entry<String, Integer> e : map.entrySet()) {
-            nomes[i] = e.getKey().isEmpty() ? "Sem tipo" : HistoryPanel.kindLabel(e.getKey());
-            mins[i] = e.getValue();
-            i++;
+        for (StudySession s : sessions) {
+            String k = s.getKind() == null ? "" : s.getKind();
+            map.merge(k.isEmpty() ? "" : HistoryPanel.kindLabel(k), s.getMinutes(), Integer::sum);
+        }
+        // ordena por tempo desc, "sem tipo" por último
+        List<Map.Entry<String, Integer>> es = new ArrayList<>(map.entrySet());
+        es.sort((a, b) -> {
+            if (a.getKey().isEmpty()) return 1;
+            if (b.getKey().isEmpty()) return -1;
+            return Integer.compare(b.getValue(), a.getValue());
+        });
+        int n = Math.min(es.size(), 10);
+        String[] nomes = new String[n];
+        int[] mins = new int[n];
+        for (int i = 0; i < n; i++) {
+            nomes[i] = es.get(i).getKey().isEmpty() ? "Sem sub-foco" : es.get(i).getKey();
+            mins[i] = es.get(i).getValue();
         }
         return bars(nomes, mins, new Color(0xFFA726));
     }
