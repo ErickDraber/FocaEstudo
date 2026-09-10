@@ -1,0 +1,9 @@
+# Gerados em runtime pelo app
+*.bak
+*.tmp
+
+# Dados pessoais de estudo (não versionar — o app cria/atualiza sozinho)
+/study_data.properties
+/study_sessions.properties
+/study_checklist.properties
+/src/study_*.properties
