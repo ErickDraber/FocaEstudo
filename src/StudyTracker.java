@@ -1066,6 +1066,11 @@ public class StudyTracker extends JFrame {
                         + " (" + quando + ")";
             if (daily > 0 && dias > 0)
                 base += "  ·  no ritmo da meta: ~" + fmtHM(daily * agendadosRestantes) + " até lá";
+            int total = 0, feitos = 0;
+            for (ChecklistItem it : checklist)
+                if (it.subject.equals(subject)) { total++; if (it.done) feitos++; }
+            if (total > 0)
+                base += "  ·  plano " + feitos + "/" + total + (feitos == total ? " ✓" : "");
             l.setText(base);
             l.setForeground(dias <= 3 ? AppTheme.WARNING : AppTheme.ACCENT);
         }
