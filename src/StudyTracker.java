@@ -851,41 +851,78 @@ public class StudyTracker extends JFrame {
         return goalsCard;
     }
 
-    /** Uma linha resumida de metas de uma matéria. */
+    /** Metas agrupadas por tipo de área (Estudo / Físico / Lazer / …), com os sub-focos de cada área. */
     private void refreshGoalsCard() {
         if (goalsBody == null) return;
         goalsBody.removeAll();
-        for (Map.Entry<String, StudyData> e : studyDataMap.entrySet()) {
-            String s = e.getKey();
+
+        // Agrupa as áreas ativas por tipo, preservando a ordem do usuário dentro de cada grupo.
+        Map<String, java.util.List<String>> porTipo = new LinkedHashMap<>();
+        for (String t : TYPE_KEYS) porTipo.put(t, new ArrayList<>());
+        for (String s : studyDataMap.keySet()) {
             if (archived.contains(s)) continue;
-            int d = goals.getOrDefault(s, 0);
-            int w = weeklyGoalFor(s);
-            int m = monthlyGoalFor(s);
+            porTipo.computeIfAbsent(typeOf(s), k -> new ArrayList<>()).add(s);
+        }
 
-            JPanel row = new JPanel(new BorderLayout(8, 0));
-            row.setOpaque(false);
-            row.setAlignmentX(Component.LEFT_ALIGNMENT);
-            row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 20));
+        boolean primeiro = true;
+        for (Map.Entry<String, java.util.List<String>> grupo : porTipo.entrySet()) {
+            if (grupo.getValue().isEmpty()) continue;
+            String tipo = grupo.getKey();
 
-            JPanel dotName = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
-            dotName.setOpaque(false);
-            dotName.add(colorDot(e.getValue().getColor()));
-            JLabel nm = new JLabel(typeIcon(typeOf(s)) + " " + s);
-            nm.setFont(AppTheme.FONT_LABEL);
-            nm.setForeground(AppTheme.TEXT_PRI);
-            dotName.add(nm);
+            if (!primeiro) goalsBody.add(Box.createVerticalStrut(8));
+            primeiro = false;
 
-            JLabel val = new JLabel(d <= 0 && w <= 0 && m <= 0
-                    ? "sem meta"
-                    : "Dia " + fmtHM(Math.max(0, d)) + "  ·  Sem " + fmtHM(w) + "  ·  Mês " + fmtHM(m));
-            val.setFont(AppTheme.FONT_SMALL);
-            val.setForeground(d <= 0 && w <= 0 && m <= 0 ? AppTheme.TEXT_MUT : AppTheme.TEXT_SEC);
-            val.setHorizontalAlignment(SwingConstants.RIGHT);
+            JPanel cab = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+            cab.setOpaque(false);
+            cab.setAlignmentX(Component.LEFT_ALIGNMENT);
+            cab.setMaximumSize(new Dimension(Integer.MAX_VALUE, 18));
+            cab.setBorder(new EmptyBorder(0, 0, 2, 0));
+            cab.add(colorDot(typeColor(tipo)));
+            JLabel cabL = new JLabel(typeLabel(tipo).toUpperCase());
+            cabL.setFont(AppTheme.FONT_CAPTION);
+            cabL.setForeground(AppTheme.TEXT_MUT);
+            cab.add(cabL);
+            goalsBody.add(cab);
 
-            row.add(dotName, BorderLayout.WEST);
-            row.add(val,     BorderLayout.EAST);
-            goalsBody.add(row);
-            goalsBody.add(Box.createVerticalStrut(4));
+            for (String s : grupo.getValue()) {
+                int d = goals.getOrDefault(s, 0);
+                int w = weeklyGoalFor(s);
+                int m = monthlyGoalFor(s);
+
+                JPanel row = new JPanel(new BorderLayout(8, 0));
+                row.setOpaque(false);
+                row.setAlignmentX(Component.LEFT_ALIGNMENT);
+                row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 20));
+
+                JPanel dotName = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+                dotName.setOpaque(false);
+                dotName.add(colorDot(studyDataMap.get(s).getColor()));
+                JLabel nm = new JLabel(s);
+                nm.setFont(AppTheme.FONT_LABEL);
+                nm.setForeground(AppTheme.TEXT_PRI);
+                dotName.add(nm);
+
+                JLabel val = new JLabel(d <= 0 && w <= 0 && m <= 0
+                        ? "sem meta"
+                        : "Dia " + fmtHM(Math.max(0, d)) + "  ·  Sem " + fmtHM(w) + "  ·  Mês " + fmtHM(m));
+                val.setFont(AppTheme.FONT_SMALL);
+                val.setForeground(d <= 0 && w <= 0 && m <= 0 ? AppTheme.TEXT_MUT : AppTheme.TEXT_SEC);
+                val.setHorizontalAlignment(SwingConstants.RIGHT);
+
+                row.add(dotName, BorderLayout.WEST);
+                row.add(val,     BorderLayout.EAST);
+                goalsBody.add(row);
+
+                java.util.List<String> sf = subFocos.get(s);
+                if (sf != null && !sf.isEmpty()) {
+                    JLabel sub = new JLabel("      " + String.join(" · ", sf));
+                    sub.setFont(AppTheme.FONT_CAPTION);
+                    sub.setForeground(AppTheme.TEXT_MUT);
+                    sub.setAlignmentX(Component.LEFT_ALIGNMENT);
+                    goalsBody.add(sub);
+                }
+                goalsBody.add(Box.createVerticalStrut(4));
+            }
         }
         goalsBody.revalidate();
         goalsBody.repaint();
@@ -904,16 +941,29 @@ public class StudyTracker extends JFrame {
 
         c.gridy = row++; panel.add(dlgLabel("Marque as matérias para limpar as metas:", true), c);
 
+        // Agrupa por tipo de área, na ordem Estudo → Físico → Lazer → Trabalho → Outro.
+        Map<String, java.util.List<String>> porTipo = new LinkedHashMap<>();
+        for (String t : TYPE_KEYS) porTipo.put(t, new ArrayList<>());
+        for (String s : ativas) porTipo.computeIfAbsent(typeOf(s), k -> new ArrayList<>()).add(s);
+
         Map<String, JCheckBox> cbs = new LinkedHashMap<>();
-        for (String s : ativas) {
-            int d = goals.getOrDefault(s, 0), w = weeklyGoalFor(s), mo = monthlyGoalFor(s);
-            boolean temMeta = d > 0 || w > 0 || mo > 0;
-            JCheckBox cb = new JCheckBox(s + "   —   " + (temMeta
-                    ? "Dia " + fmtHM(Math.max(0, d)) + " · Sem " + fmtHM(w) + " · Mês " + fmtHM(mo)
-                    : "sem meta"));
-            cb.setEnabled(temMeta);
-            cbs.put(s, cb);
-            c.gridy = row++; panel.add(cb, c);
+        for (Map.Entry<String, java.util.List<String>> grupo : porTipo.entrySet()) {
+            if (grupo.getValue().isEmpty()) continue;
+            JLabel cab = new JLabel(typeLabel(grupo.getKey()).toUpperCase());
+            cab.setFont(AppTheme.FONT_CAPTION);
+            cab.setForeground(AppTheme.TEXT_MUT);
+            c.gridy = row++; c.insets = new Insets(8, 2, 2, 2); panel.add(cab, c);
+            c.insets = new Insets(2, 2, 2, 2);
+            for (String s : grupo.getValue()) {
+                int d = goals.getOrDefault(s, 0), w = weeklyGoalFor(s), mo = monthlyGoalFor(s);
+                boolean temMeta = d > 0 || w > 0 || mo > 0;
+                JCheckBox cb = new JCheckBox("   " + s + "   —   " + (temMeta
+                        ? "Dia " + fmtHM(Math.max(0, d)) + " · Sem " + fmtHM(w) + " · Mês " + fmtHM(mo)
+                        : "sem meta"));
+                cb.setEnabled(temMeta);
+                cbs.put(s, cb);
+                c.gridy = row++; panel.add(cb, c);
+            }
         }
 
         JButton todas = new JButton("Marcar todas com meta");
@@ -2719,10 +2769,20 @@ public class StudyTracker extends JFrame {
     private void refreshCombo() {
         Object sel = subjectComboBox.getSelectedItem();
         subjectComboBox.removeAllItems();
+        // Agrupa por tipo (Estudo → Físico → Lazer → Trabalho → Outro), preservando a ordem do usuário dentro do grupo.
+        for (String t : TYPE_KEYS)
+            for (String s : studyDataMap.keySet())
+                if (!archived.contains(s) && typeOf(s).equals(t)) subjectComboBox.addItem(s);
+        // Qualquer tipo desconhecido (não deveria acontecer) entra no fim.
         for (String s : studyDataMap.keySet())
-            if (!archived.contains(s)) subjectComboBox.addItem(s);
+            if (!archived.contains(s) && typeIndexKnown(typeOf(s)) < 0) subjectComboBox.addItem(s);
         if (sel != null && !archived.contains(sel)) subjectComboBox.setSelectedItem(sel);
         refreshKindCombo();
+    }
+
+    private static int typeIndexKnown(String key) {
+        for (int i = 0; i < TYPE_KEYS.length; i++) if (TYPE_KEYS[i].equals(key)) return i;
+        return -1;
     }
 
     /** Popula o combo de sub-foco com os sub-focos da área ativa. */
