@@ -50,6 +50,8 @@ public class StudyTracker extends JFrame {
     private JPanel        progressBody;
     private RoundedPanel  goalsCard;
     private JPanel        goalsBody;
+    private RoundedPanel  balanceCard;
+    private JPanel        balanceBody;
 
     // --- Cronômetro ---
     private Timer  stopwatch;
@@ -97,6 +99,15 @@ public class StudyTracker extends JFrame {
     private JComboBox<String> kindCombo;
     private static final String[] KIND_LABELS = {"–", "Teoria", "Exercícios", "Revisão", "Outro"};
     private static final String[] KIND_KEYS   = {"", "teoria", "exercicios", "revisao", "outro"};
+
+    // --- Áreas: tipo de cada área ("estudo"|"fisico"|"lazer"|"trabalho"|"outro"). Ausente = "estudo". ---
+    private final Map<String, String> areaType = new LinkedHashMap<>();
+    private static final String[] TYPE_KEYS   = {"estudo", "fisico", "lazer", "trabalho", "outro"};
+    private static final String[] TYPE_LABELS = {"Estudo", "Físico", "Lazer", "Trabalho", "Outro"};
+    private static final String[] TYPE_ICONS  = {"📚", "💪", "🎮", "💼", "•"};
+    // Meta mínima semanal por TIPO (minutos). 0/ausente = sem meta de equilíbrio.
+    private final Map<String, Integer> typeGoalWeek = new LinkedHashMap<>();
+    private String balanceNudgeWeek = null;   // ISO "2026-W37" da última vez que avisou desequilíbrio
 
     // --- Metas (em minutos, por matéria; 0 = sem meta) ---
     private final Map<String, Integer> goals      = new LinkedHashMap<>(); // diária
@@ -279,8 +290,11 @@ public class StudyTracker extends JFrame {
         JPanel leftBottom = new JPanel();
         leftBottom.setLayout(new BoxLayout(leftBottom, BoxLayout.Y_AXIS));
         leftBottom.setOpaque(false);
+        JComponent bc = buildBalanceCard();  bc.setAlignmentX(Component.LEFT_ALIGNMENT);
         JComponent gc = buildGoalsCard();    gc.setAlignmentX(Component.LEFT_ALIGNMENT);
         JComponent pc = buildProgressCard(); pc.setAlignmentX(Component.LEFT_ALIGNMENT);
+        leftBottom.add(bc);
+        leftBottom.add(Box.createVerticalStrut(12));
         leftBottom.add(gc);
         leftBottom.add(Box.createVerticalStrut(12));
         leftBottom.add(pc);
@@ -448,6 +462,162 @@ public class StudyTracker extends JFrame {
     // ── CARTÃO DE PROGRESSO ──────────────────────────────────────────────────
 
     /** Cartão "Metas" — visão rápida das metas de todas as matérias. */
+    /** Cartão "Equilíbrio" — tempo da semana por tipo de área (Estudo/Físico/Lazer/Trabalho). */
+    private JComponent buildBalanceCard() {
+        balanceCard = new RoundedPanel(18, AppTheme.SURFACE);
+        balanceCard.setLayout(new BorderLayout(0, 8));
+        balanceCard.setBorder(new EmptyBorder(14, 16, 14, 16));
+
+        JLabel title = new JLabel("Equilíbrio · esta semana");
+        title.setFont(AppTheme.FONT_SECTION);
+        title.setForeground(AppTheme.TEXT_PRI);
+
+        StyledButton metas = new StyledButton("Metas…", StyledButton.Variant.TEXT);
+        metas.setFont(AppTheme.FONT_SMALL);
+        metas.addActionListener(e -> showTypeGoalsDialog());
+
+        JPanel head = new JPanel(new BorderLayout());
+        head.setOpaque(false);
+        head.add(title, BorderLayout.WEST);
+        head.add(metas, BorderLayout.EAST);
+        balanceCard.add(head, BorderLayout.NORTH);
+
+        balanceBody = new JPanel();
+        balanceBody.setLayout(new BoxLayout(balanceBody, BoxLayout.Y_AXIS));
+        balanceBody.setOpaque(false);
+        balanceCard.add(balanceBody, BorderLayout.CENTER);
+        return balanceCard;
+    }
+
+    private void refreshBalanceCard() {
+        if (balanceBody == null) return;
+        balanceBody.removeAll();
+        LocalDate today = LocalDate.now();
+        LocalDate ws = weekStart(today);
+
+        int[] mins = new int[TYPE_KEYS.length];
+        for (int i = 0; i < TYPE_KEYS.length; i++) mins[i] = minutesByTypeInRange(TYPE_KEYS[i], ws, today);
+        int ref = 1;
+        for (int i = 0; i < TYPE_KEYS.length; i++)
+            ref = Math.max(ref, Math.max(mins[i], typeGoalWeek.getOrDefault(TYPE_KEYS[i], 0)));
+
+        boolean any = false;
+        for (int i = 0; i < TYPE_KEYS.length; i++) {
+            int goalW = typeGoalWeek.getOrDefault(TYPE_KEYS[i], 0);
+            if (mins[i] == 0 && goalW == 0) continue;   // tipo sem uso e sem meta: não mostra
+            any = true;
+            balanceBody.add(balanceRow(TYPE_KEYS[i], mins[i], goalW, ref));
+            balanceBody.add(Box.createVerticalStrut(5));
+        }
+        if (!any) {
+            JLabel l = new JLabel("Registre tempo em Estudo, Físico ou Lazer para ver o equilíbrio.");
+            l.setFont(AppTheme.FONT_SMALL); l.setForeground(AppTheme.TEXT_MUT);
+            l.setAlignmentX(Component.LEFT_ALIGNMENT);
+            balanceBody.add(l);
+        }
+        balanceBody.revalidate();
+        balanceBody.repaint();
+    }
+
+    private JPanel balanceRow(String type, int mins, int goalW, int ref) {
+        JPanel row = new JPanel(new BorderLayout(8, 0));
+        row.setOpaque(false);
+        row.setAlignmentX(Component.LEFT_ALIGNMENT);
+        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 22));
+
+        JLabel name = new JLabel(typeIcon(type) + " " + typeLabel(type));
+        name.setFont(AppTheme.FONT_SMALL);
+        name.setForeground(AppTheme.TEXT_SEC);
+        name.setPreferredSize(new Dimension(96, 16));
+
+        final Color col = typeColor(type);
+        final int mn = mins, rf = Math.max(1, ref), gw = goalW;
+        JPanel bar = new JPanel() {
+            @Override protected void paintComponent(Graphics g) {
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                g2.setColor(AppTheme.SURFACE2);
+                g2.fillRoundRect(0, 5, getWidth(), getHeight() - 10, 6, 6);
+                int w = (int) (getWidth() * Math.min(1.0, mn / (double) rf));
+                g2.setColor(col);
+                g2.fillRoundRect(0, 5, Math.max(mn > 0 ? 3 : 0, w), getHeight() - 10, 6, 6);
+                if (gw > 0) {   // marca da meta
+                    int mx = (int) (getWidth() * Math.min(1.0, gw / (double) rf));
+                    g2.setColor(AppTheme.TEXT_SEC);
+                    g2.fillRect(Math.min(getWidth() - 2, mx), 2, 2, getHeight() - 4);
+                }
+                g2.dispose();
+            }
+            @Override public Dimension getPreferredSize() { return new Dimension(10, 18); }
+        };
+        bar.setOpaque(false);
+
+        String txt = goalW > 0 ? fmtHM(mins) + " / " + fmtHM(goalW) : fmtHM(mins);
+        JLabel val = new JLabel(txt, SwingConstants.RIGHT);
+        val.setFont(AppTheme.FONT_SMALL);
+        val.setForeground(goalW > 0 && mins >= goalW ? AppTheme.SUCCESS
+                : goalW > 0 && mins == 0 ? AppTheme.WARNING : AppTheme.TEXT_SEC);
+        val.setPreferredSize(new Dimension(90, 16));
+
+        row.add(name, BorderLayout.WEST);
+        row.add(bar,  BorderLayout.CENTER);
+        row.add(val,  BorderLayout.EAST);
+        return row;
+    }
+
+    private void showTypeGoalsDialog() {
+        JPanel panel = new JPanel(new GridBagLayout());
+        GridBagConstraints c = new GridBagConstraints();
+        c.insets = new Insets(4, 4, 4, 4); c.anchor = GridBagConstraints.WEST;
+        c.gridx = 0; c.gridy = 0; c.gridwidth = 2;
+        panel.add(dlgHint("Mínimo por semana para cada tipo (vazio = sem meta de equilíbrio)."), c);
+        c.gridwidth = 1;
+
+        JTextField[] fs = new JTextField[TYPE_KEYS.length];
+        for (int i = 0; i < TYPE_KEYS.length; i++) {
+            int v = typeGoalWeek.getOrDefault(TYPE_KEYS[i], 0);
+            fs[i] = new JTextField(v > 0 ? String.valueOf(v) : "", 6);
+            fs[i].setFont(AppTheme.FONT_LABEL);
+            addFormRow(panel, c, i + 1, TYPE_ICONS[i] + "  " + TYPE_LABELS[i] + ":", fs[i]);
+        }
+
+        int r = JOptionPane.showConfirmDialog(this, panel, "Metas de equilíbrio (semana)",
+                JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+        if (r != JOptionPane.OK_OPTION) return;
+        try {
+            for (int i = 0; i < TYPE_KEYS.length; i++) {
+                int v = parseDuration(fs[i].getText());
+                if (v > 0) typeGoalWeek.put(TYPE_KEYS[i], v); else typeGoalWeek.remove(TYPE_KEYS[i]);
+            }
+        } catch (IllegalArgumentException ex) {
+            toast("Valor inválido — use \"90\" ou \"1h30\"."); return;
+        }
+        updateUI();
+        toast("Metas de equilíbrio atualizadas.");
+    }
+
+    /** Aviso gentil (1x por semana) se algum tipo com meta está zerado a partir de quinta. */
+    private void balanceNudge() {
+        if (!ready) return;
+        LocalDate today = LocalDate.now();
+        if (today.getDayOfWeek().getValue() < 4) return;   // só de quinta em diante
+        java.time.temporal.WeekFields wf = java.time.temporal.WeekFields.ISO;
+        String semana = today.get(wf.weekBasedYear()) + "-W" + today.get(wf.weekOfWeekBasedYear());
+        if (semana.equals(balanceNudgeWeek)) return;
+
+        LocalDate ws = weekStart(today);
+        List<String> faltando = new ArrayList<>();
+        for (String t : TYPE_KEYS) {
+            if (typeGoalWeek.getOrDefault(t, 0) <= 0) continue;
+            if (minutesByTypeInRange(t, ws, today) == 0) faltando.add(typeLabel(t).toLowerCase());
+        }
+        if (faltando.isEmpty()) return;
+        balanceNudgeWeek = semana;   // persistido no saveData() do updateUI
+        Timer tt = new Timer(600, e -> toast("Sua semana está sem " + String.join(" e ", faltando)
+                + ". Que tal um pouco hoje? 🙂"));
+        tt.setRepeats(false); tt.start();
+    }
+
     private JComponent buildGoalsCard() {
         goalsCard = new RoundedPanel(18, AppTheme.SURFACE);
         goalsCard.setLayout(new BorderLayout(0, 8));
@@ -494,7 +664,7 @@ public class StudyTracker extends JFrame {
             JPanel dotName = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
             dotName.setOpaque(false);
             dotName.add(colorDot(e.getValue().getColor()));
-            JLabel nm = new JLabel(s);
+            JLabel nm = new JLabel(typeIcon(typeOf(s)) + " " + s);
             nm.setFont(AppTheme.FONT_LABEL);
             nm.setForeground(AppTheme.TEXT_PRI);
             dotName.add(nm);
@@ -812,6 +982,37 @@ public class StudyTracker extends JFrame {
     }
 
     /** Quantos dias por semana a meta diária vale (7 se não houver restrição). */
+    // ── TIPO DE ÁREA ────────────────────────────────────────────────────────
+
+    private String typeOf(String area) { return areaType.getOrDefault(area, "estudo"); }
+
+    private static int typeIndex(String key) {
+        for (int i = 0; i < TYPE_KEYS.length; i++) if (TYPE_KEYS[i].equals(key)) return i;
+        return 0;
+    }
+    private static String typeLabel(String key) { return TYPE_LABELS[typeIndex(key)]; }
+    private static String typeIcon(String key)  { return TYPE_ICONS[typeIndex(key)]; }
+    private static Color typeColor(String key) {
+        switch (key) {
+            case "fisico":   return new Color(0x66BB6A);
+            case "lazer":    return new Color(0xAB47BC);
+            case "trabalho": return new Color(0xFFA726);
+            case "outro":    return new Color(0x8FA0B8);
+            default:         return AppTheme.ACCENT;   // estudo
+        }
+    }
+
+    /** Minutos estudados por tipo numa janela de datas [start, end]. */
+    private int minutesByTypeInRange(String type, LocalDate start, LocalDate end) {
+        int total = 0;
+        for (StudySession s : sessions) {
+            if (!typeOf(s.getSubject()).equals(type)) continue;
+            LocalDate d = dateOf(s.getTimestamp());
+            if (!d.isBefore(start) && !d.isAfter(end)) total += s.getMinutes();
+        }
+        return total;
+    }
+
     private int goalDaysPerWeek(String subject) {
         java.util.Set<java.time.DayOfWeek> d = subject == null ? null : goalDays.get(subject);
         return d == null || d.isEmpty() ? 7 : d.size();
@@ -860,8 +1061,8 @@ public class StudyTracker extends JFrame {
         row.setOpaque(false);
         row.setBorder(new EmptyBorder(8, 0, 0, 0));
 
-        StyledButton btnAdd    = new StyledButton("+ Matéria",  StyledButton.Variant.TONAL);
-        StyledButton btnEdit   = new StyledButton("Renomear",   StyledButton.Variant.OUTLINED);
+        StyledButton btnAdd    = new StyledButton("+ Área",  StyledButton.Variant.TONAL);
+        StyledButton btnEdit   = new StyledButton("Editar área",   StyledButton.Variant.OUTLINED);
         StyledButton btnColor  = new StyledButton("Cor",        StyledButton.Variant.OUTLINED);
         StyledButton btnZero   = new StyledButton("Zerar matéria", StyledButton.Variant.OUTLINED);
         StyledButton btnArch   = new StyledButton("Arquivar",   StyledButton.Variant.OUTLINED);
@@ -1797,23 +1998,59 @@ public class StudyTracker extends JFrame {
     // ── GERENCIAMENTO DE MATÉRIAS ────────────────────────────────────────────
 
     private void addNewSubject() {
-        String name = JOptionPane.showInputDialog(this, "Nome da nova matéria:", "Adicionar Matéria", JOptionPane.PLAIN_MESSAGE);
-        if (name == null || name.trim().isEmpty()) return;
-        name = name.trim();
+        JTextField fName = new JTextField(18);
+        JComboBox<String> cbType = tipoCombo("estudo");
+        JPanel panel = new JPanel(new GridBagLayout());
+        GridBagConstraints c = new GridBagConstraints();
+        c.insets = new Insets(4, 4, 4, 4); c.anchor = GridBagConstraints.WEST;
+        addFormRow(panel, c, 0, "Nome:", fName);
+        addFormRow(panel, c, 1, "Tipo:", cbType);
+
+        int r = JOptionPane.showConfirmDialog(this, panel, "Nova área",
+                JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+        if (r != JOptionPane.OK_OPTION) return;
+        String name = fName.getText().trim();
+        if (name.isEmpty()) return;
+        String type = TYPE_KEYS[Math.max(0, cbType.getSelectedIndex())];
+
         if (archived.remove(name)) {                       // era arquivada → desarquiva
             refreshCombo(); subjectComboBox.setSelectedItem(name); updateUI();
             toast("\"" + name + "\" desarquivada."); return;
         }
-        if (studyDataMap.containsKey(name)) { toast("Essa matéria já existe!"); return; }
+        if (studyDataMap.containsKey(name)) { toast("Essa área já existe!"); return; }
         studyDataMap.put(name, new StudyData(0, AppTheme.nextColor(studyDataMap.size())));
+        if (!"estudo".equals(type)) areaType.put(name, type);
         refreshCombo(); subjectComboBox.setSelectedItem(name); updateUI();
+    }
+
+    private JComboBox<String> tipoCombo(String selectedKey) {
+        String[] itens = new String[TYPE_KEYS.length];
+        for (int i = 0; i < TYPE_KEYS.length; i++) itens[i] = TYPE_ICONS[i] + "  " + TYPE_LABELS[i];
+        JComboBox<String> cb = new JComboBox<>(itens);
+        cb.setSelectedIndex(typeIndex(selectedKey));
+        cb.setFont(AppTheme.FONT_LABEL);
+        return cb;
     }
 
     private void editSubjectName() {
         String old = (String) subjectComboBox.getSelectedItem(); if (old == null) return;
-        String nw = JOptionPane.showInputDialog(this, "Novo nome:", old);
-        if (nw == null || nw.trim().isEmpty() || nw.trim().equals(old)) return;
-        nw = nw.trim();
+
+        JTextField fName = new JTextField(old, 18);
+        JComboBox<String> cbType = tipoCombo(typeOf(old));
+        JPanel panel = new JPanel(new GridBagLayout());
+        GridBagConstraints gc = new GridBagConstraints();
+        gc.insets = new Insets(4, 4, 4, 4); gc.anchor = GridBagConstraints.WEST;
+        addFormRow(panel, gc, 0, "Nome:", fName);
+        addFormRow(panel, gc, 1, "Tipo:", cbType);
+        int rr = JOptionPane.showConfirmDialog(this, panel, "Editar área",
+                JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+        if (rr != JOptionPane.OK_OPTION) return;
+
+        String novoTipo = TYPE_KEYS[Math.max(0, cbType.getSelectedIndex())];
+        if ("estudo".equals(novoTipo)) areaType.remove(old); else areaType.put(old, novoTipo);
+
+        String nw = fName.getText().trim();
+        if (nw.isEmpty() || nw.equals(old)) { refreshCombo(); subjectComboBox.setSelectedItem(old); updateUI(); return; }
         if (studyDataMap.containsKey(nw)) { toast("Esse nome já existe!"); return; }
         StudyData d = studyDataMap.remove(old);
         // Reconstrói mantendo ordem
@@ -1830,6 +2067,7 @@ public class StudyTracker extends JFrame {
         if (streakBest.containsKey(old)) { streakBest.put(nw, streakBest.remove(old)); }
         if (goalDays.containsKey(old))   { goalDays.put(nw, goalDays.remove(old)); }
         if (archived.remove(old))        { archived.add(nw); }
+        if (areaType.containsKey(old))   { areaType.put(nw, areaType.remove(old)); }
         for (ChecklistItem it : checklist) if (it.subject.equals(old)) it.subject = nw;
         if (examDate.containsKey(old))   { examDate.put(nw, examDate.remove(old)); }
         refreshCombo(); subjectComboBox.setSelectedItem(nw); saveChecklist(); updateUI();
@@ -1870,7 +2108,7 @@ public class StudyTracker extends JFrame {
     private void deleteSubject() {
         String s = (String) subjectComboBox.getSelectedItem(); if (s == null) return;
         int r = JOptionPane.showConfirmDialog(this, "Deletar \"" + s + "\"? Todo o tempo será perdido.", "Deletar Matéria", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
-        if (r == JOptionPane.YES_OPTION) { studyDataMap.remove(s); goals.remove(s); goalsWeek.remove(s); goalsMonth.remove(s); streakBest.remove(s); goalDays.remove(s); examDate.remove(s); archived.remove(s); checklist.removeIf(it -> it.subject.equals(s)); saveChecklist(); refreshCombo(); updateUI(); }
+        if (r == JOptionPane.YES_OPTION) { studyDataMap.remove(s); goals.remove(s); goalsWeek.remove(s); goalsMonth.remove(s); streakBest.remove(s); goalDays.remove(s); examDate.remove(s); archived.remove(s); areaType.remove(s); checklist.removeIf(it -> it.subject.equals(s)); saveChecklist(); refreshCombo(); updateUI(); }
     }
 
     // ── HISTÓRICO ───────────────────────────────────────────────────────────
@@ -1975,6 +2213,7 @@ public class StudyTracker extends JFrame {
         studyDataMap.clear(); sessions.clear(); checklist.clear();
         goals.clear(); goalsWeek.clear(); goalsMonth.clear();
         goalDays.clear(); examDate.clear(); archived.clear();
+        areaType.clear(); typeGoalWeek.clear();
         streakBest.clear(); unknownProps.clear();
         streakBestGeneral = 0; celebratedStreakMilestone = 0;
         loadData();
@@ -2121,9 +2360,11 @@ public class StudyTracker extends JFrame {
         }
         updateGoalProgress();
         refreshStreaks();
+        refreshBalanceCard();
         refreshGoalsCard();
         refreshProgressCard();
         updatePomodoroCount();
+        balanceNudge();
         saveData();
     }
 
@@ -2192,6 +2433,9 @@ public class StudyTracker extends JFrame {
             p.setProperty("goaldays_" + k, sb.toString());
         });
         examDate.forEach((k, dt) -> p.setProperty("exam_" + k, dt.toString())); // ISO yyyy-MM-dd
+        areaType.forEach((k, v) -> { if (!"estudo".equals(v)) p.setProperty("type_" + k, v); });
+        typeGoalWeek.forEach((k, v) -> { if (v > 0) p.setProperty("typegoalw_" + k, String.valueOf(v)); });
+        if (balanceNudgeWeek != null) p.setProperty("__balance_nudge_week__", balanceNudgeWeek);
         if (!archived.isEmpty()) p.setProperty("__archived__", String.join(",", archived));
         streakBest.forEach((k, v) -> p.setProperty("streakbest_" + k, String.valueOf(v)));
         unknownProps.forEach(p::setProperty);   // preserva chaves que não soubemos ler
@@ -2314,6 +2558,15 @@ public class StudyTracker extends JFrame {
                     try { examDate.put(k.substring(5), LocalDate.parse(p.getProperty(k))); } catch (Exception ignored) {}
                     continue;
                 }
+                if (k.startsWith("typegoalw_")) {
+                    try { typeGoalWeek.put(k.substring(10), Integer.parseInt(p.getProperty(k))); } catch (Exception ignored) {}
+                    continue;
+                }
+                if (k.startsWith("type_")) {
+                    areaType.put(k.substring(5), p.getProperty(k));
+                    continue;
+                }
+                if (k.equals("__balance_nudge_week__")) { balanceNudgeWeek = p.getProperty(k); continue; }
                 if (k.startsWith("goal_")) {
                     try { goals.put(k.substring(5), Integer.parseInt(p.getProperty(k))); } catch (Exception ignored) {}
                     continue;
