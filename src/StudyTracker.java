@@ -1320,8 +1320,19 @@ public class StudyTracker extends JFrame {
         addFormRow(panel, c, row++, "Meta mensal:",  fMonth);
 
         c.gridx = 0; c.gridy = row++; c.gridwidth = 2; c.weightx = 1;
-        c.fill = GridBagConstraints.HORIZONTAL; c.insets = new Insets(2, 3, 10, 3);
+        c.fill = GridBagConstraints.HORIZONTAL; c.insets = new Insets(2, 3, 4, 3);
         panel.add(dlgHint("Minutos (\"90\") ou horas (\"1h30\").  Semana/mês em branco = calculados pela meta diária × dias."), c);
+
+        JButton btnLimpar = new JButton("Limpar metas");
+        btnLimpar.setFont(AppTheme.FONT_SMALL);
+        btnLimpar.setMargin(new Insets(2, 8, 2, 8));
+        btnLimpar.setFocusPainted(false);
+        btnLimpar.setToolTipText("Zera meta diária, semanal e mensal desta matéria");
+        btnLimpar.addActionListener(e -> { fDay.setText(""); fWeek.setText(""); fMonth.setText(""); });
+        JPanel limparRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+        limparRow.add(btnLimpar);
+        c.gridy = row++; c.insets = new Insets(0, 3, 10, 3);
+        panel.add(limparRow, c);
         c.gridwidth = 1; c.weightx = 0; c.fill = GridBagConstraints.NONE; c.insets = new Insets(3, 3, 3, 3);
 
         // Dias da semana em que a meta vale (para sequência não quebrar no fim de semana).
@@ -1409,6 +1420,14 @@ public class StudyTracker extends JFrame {
         if (avg30 == 0 && avgAct == 0) {
             c.gridx = 0; c.gridy = row++; c.gridwidth = 2;
             panel.add(dlgHint("Estude alguns dias e o app passa a sugerir metas pela sua média."), c);
+        }
+
+        int melhorSem = bestWeekMinutes(subject);
+        if (melhorSem > 0) {
+            int perDay = Math.max(5, melhorSem / Math.max(1, nDiasSel.getAsInt()));
+            c.gridx = 0; c.gridy = row++; c.gridwidth = 2;
+            panel.add(suggestionRow("Repetir sua melhor semana (" + fmtHM(melhorSem) + ")  →  " + fmtHM(perDay) + "/dia",
+                    perDay, nDiasSel, fDay, fWeek, fMonth), c);
         }
 
         // Meta adaptativa (item 1): sobe se vem batendo folgado, baixa se vem falhando muito.
@@ -1555,6 +1574,21 @@ public class StudyTracker extends JFrame {
             total += s.getMinutes();
         }
         return daysStudied.isEmpty() ? 0 : total / daysStudied.size();
+    }
+
+    /** Minutos da melhor semana ISO da matéria em todo o histórico. */
+    private int bestWeekMinutes(String subject) {
+        java.time.temporal.WeekFields wf = java.time.temporal.WeekFields.ISO;
+        Map<String, Integer> porSemana = new HashMap<>();
+        for (StudySession s : sessions) {
+            if (subject != null && !s.getSubject().equals(subject)) continue;
+            LocalDate d = dateOf(s.getTimestamp());
+            String k = d.get(wf.weekBasedYear()) + "-" + d.get(wf.weekOfWeekBasedYear());
+            porSemana.merge(k, s.getMinutes(), Integer::sum);
+        }
+        int max = 0;
+        for (int v : porSemana.values()) max = Math.max(max, v);
+        return max;
     }
 
     /** Campo de texto para meta, pré-preenchido (vazio se 0). */
