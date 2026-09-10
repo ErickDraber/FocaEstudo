@@ -683,14 +683,48 @@ public class StudyTracker extends JFrame {
         return h > 0 ? String.format("%dh%02d", h, m) : m + "m";
     }
 
-    private int weeklyGoalFor(String subject) {
-        if (subject == null) { int s = 0; for (int g : goalsWeek.values()) s += g; return s; }
-        return goalsWeek.getOrDefault(subject, 0);
+    /** Quantos dias por semana a meta diária vale (7 se não houver restrição). */
+    private int goalDaysPerWeek(String subject) {
+        java.util.Set<java.time.DayOfWeek> d = subject == null ? null : goalDays.get(subject);
+        return d == null || d.isEmpty() ? 7 : d.size();
     }
 
+    /** Dias agendados (que exigem meta) dentro do mês de 'ref'. */
+    private int scheduledDaysInMonth(String subject, LocalDate ref) {
+        int n = 0;
+        LocalDate d = ref.withDayOfMonth(1);
+        for (int i = 0; i < d.lengthOfMonth(); i++, d = d.plusDays(1))
+            if (isGoalDay(subject, d)) n++;
+        return n;
+    }
+
+    /**
+     * Meta semanal. Se o usuário definiu um valor, ele manda. Senão, deriva de
+     * meta_diária × dias/semana em que a meta vale (assim mudar os dias muda a meta).
+     */
+    private int weeklyGoalFor(String subject) {
+        if (subject == null) {
+            int s = 0;
+            for (String k : studyDataMap.keySet()) if (!archived.contains(k)) s += weeklyGoalFor(k);
+            return s;
+        }
+        int stored = goalsWeek.getOrDefault(subject, 0);
+        if (stored > 0) return stored;
+        int daily = goals.getOrDefault(subject, 0);
+        return daily > 0 ? daily * goalDaysPerWeek(subject) : 0;
+    }
+
+    /** Meta mensal. Definida pelo usuário manda; senão, meta_diária × dias agendados no mês. */
     private int monthlyGoalFor(String subject) {
-        if (subject == null) { int s = 0; for (int g : goalsMonth.values()) s += g; return s; }
-        return goalsMonth.getOrDefault(subject, 0);
+        if (subject == null) {
+            int s = 0;
+            for (String k : studyDataMap.keySet()) if (!archived.contains(k)) s += monthlyGoalFor(k);
+            return s;
+        }
+        int stored = goalsMonth.getOrDefault(subject, 0);
+        if (stored > 0) return stored;
+        int daily = goals.getOrDefault(subject, 0);
+        return daily > 0 ? daily * scheduledDaysInMonth(subject, LocalDate.now()) : 0;
     }
 
     private JPanel buildManagementRow() {
@@ -1287,7 +1321,7 @@ public class StudyTracker extends JFrame {
 
         c.gridx = 0; c.gridy = row++; c.gridwidth = 2; c.weightx = 1;
         c.fill = GridBagConstraints.HORIZONTAL; c.insets = new Insets(2, 3, 10, 3);
-        panel.add(dlgHint("Digite em minutos (\"90\") ou horas (\"1h30\", \"1:30\").  0 ou vazio = sem meta."), c);
+        panel.add(dlgHint("Minutos (\"90\") ou horas (\"1h30\").  Semana/mês em branco = calculados pela meta diária × dias."), c);
         c.gridwidth = 1; c.weightx = 0; c.fill = GridBagConstraints.NONE; c.insets = new Insets(3, 3, 3, 3);
 
         // Dias da semana em que a meta vale (para sequência não quebrar no fim de semana).
@@ -1303,10 +1337,34 @@ public class StudyTracker extends JFrame {
             tgDias[i].setFocusPainted(false);
             diasRow.add(tgDias[i]);
         }
+        java.util.function.IntSupplier nDiasSel = () -> {
+            int n = 0;
+            for (JToggleButton t : tgDias) if (t.isSelected()) n++;
+            return n == 0 ? 7 : n;
+        };
+
+        JLabel diasHint = dlgHint(nDiasSel.getAsInt() + " dia(s)/semana com meta");
+        // Ao MEXER nos dias, semana e mês passam a ser diária × nº de dias.
+        for (JToggleButton t : tgDias) t.addItemListener(e -> {
+            int nd = nDiasSel.getAsInt();
+            int d;
+            try { d = parseDuration(fDay.getText()); } catch (Exception ex) { d = 0; }
+            if (d > 0) {
+                int wk = d * nd, mo = (int) Math.round(wk * 30.0 / 7.0);
+                fWeek.setText(String.valueOf(wk));
+                fMonth.setText(String.valueOf(mo));
+                diasHint.setText(nd + " dia(s)/semana  →  semana " + fmtHM(wk) + "  ·  mês " + fmtHM(mo));
+            } else {
+                diasHint.setText(nd + " dia(s)/semana. Preencha a meta diária p/ calcular semana e mês.");
+            }
+        });
+
         c.gridx = 0; c.gridy = row++; c.gridwidth = 2;
         panel.add(dlgLabel("Dias da meta diária", true), c);
         c.gridy = row++;
         panel.add(diasRow, c);
+        c.gridy = row++; c.insets = new Insets(0, 3, 4, 3);
+        panel.add(diasHint, c);
         c.gridy = row++; c.insets = new Insets(0, 3, 10, 3);
         panel.add(dlgHint("Dias desmarcados não exigem a meta e não quebram a sequência."), c);
         c.insets = new Insets(3, 3, 3, 3);
@@ -1330,7 +1388,7 @@ public class StudyTracker extends JFrame {
             JButton b = new JButton(fmtHM(mm));
             b.setMargin(new Insets(2, 8, 2, 8));
             b.setFocusPainted(false);
-            b.addActionListener(e -> fillGoalFields(mm, fDay, fWeek, fMonth));
+            b.addActionListener(e -> fillGoalFields(mm, nDiasSel.getAsInt(), fDay, fWeek, fMonth));
             presets.add(b);
         }
         c.gridx = 0; c.gridy = row++; c.gridwidth = 2;
@@ -1341,12 +1399,12 @@ public class StudyTracker extends JFrame {
         if (avg30 > 0) {
             c.gridx = 0; c.gridy = row++; c.gridwidth = 2;
             panel.add(suggestionRow("Sua média nos últimos 30 dias: " + fmtHM(avg30) + "/dia",
-                    Math.max(5, avg30), fDay, fWeek, fMonth), c);
+                    Math.max(5, avg30), nDiasSel, fDay, fWeek, fMonth), c);
         }
         if (avgAct > 0 && avgAct != avg30) {
             c.gridx = 0; c.gridy = row++; c.gridwidth = 2;
             panel.add(suggestionRow("Média nos dias em que você estudou: " + fmtHM(avgAct),
-                    avgAct, fDay, fWeek, fMonth), c);
+                    avgAct, nDiasSel, fDay, fWeek, fMonth), c);
         }
         if (avg30 == 0 && avgAct == 0) {
             c.gridx = 0; c.gridy = row++; c.gridwidth = 2;
@@ -1361,7 +1419,7 @@ public class StudyTracker extends JFrame {
             panel.add(suggestionRow(
                     (adapt > atual ? "Você vem batendo com folga — que tal subir para " + fmtHM(adapt) + "?"
                                    : "Semanas puxadas — sugestão: baixar para " + fmtHM(adapt) + " e retomar o ritmo"),
-                    adapt, fDay, fWeek, fMonth), c);
+                    adapt, nDiasSel, fDay, fWeek, fMonth), c);
         }
 
         int r = JOptionPane.showConfirmDialog(this, panel,
@@ -1444,21 +1502,26 @@ public class StudyTracker extends JFrame {
         return 0;
     }
 
-    /** Preenche os 3 campos a partir de uma meta diária (semana ≈ 5 dias, mês ≈ 20). */
-    private void fillGoalFields(int daily, JTextField fDay, JTextField fWeek, JTextField fMonth) {
+    /**
+     * Preenche os 3 campos a partir de uma meta diária, usando o nº de dias/semana
+     * selecionados: semana = diária × nDias; mês = semana × ~4,345.
+     */
+    private void fillGoalFields(int daily, int nDias, JTextField fDay, JTextField fWeek, JTextField fMonth) {
+        int week = daily * nDias;
         fDay.setText(String.valueOf(daily));
-        fWeek.setText(String.valueOf(daily * 5));
-        fMonth.setText(String.valueOf(daily * 20));
+        fWeek.setText(String.valueOf(week));
+        fMonth.setText(String.valueOf((int) Math.round(week * 30.0 / 7.0)));
     }
 
-    private JPanel suggestionRow(String text, int minutes, JTextField fDay, JTextField fWeek, JTextField fMonth) {
+    private JPanel suggestionRow(String text, int minutes, java.util.function.IntSupplier nDias,
+                                JTextField fDay, JTextField fWeek, JTextField fMonth) {
         JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
         row.add(dlgHint(text));
         JButton use = new JButton("Usar");
         use.setMargin(new Insets(1, 8, 1, 8));
         use.setFont(AppTheme.FONT_SMALL);
         use.setFocusPainted(false);
-        use.addActionListener(e -> fillGoalFields(minutes, fDay, fWeek, fMonth));
+        use.addActionListener(e -> fillGoalFields(minutes, nDias.getAsInt(), fDay, fWeek, fMonth));
         row.add(use);
         return row;
     }
