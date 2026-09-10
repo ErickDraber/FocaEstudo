@@ -48,6 +48,8 @@ public class StudyTracker extends JFrame {
     private JLabel        tvGoalLabel, tvGoalPercent;
     private RoundedPanel  progressCard;
     private JPanel        progressBody;
+    private RoundedPanel  goalsCard;
+    private JPanel        goalsBody;
 
     // --- Cronômetro ---
     private Timer  stopwatch;
@@ -274,7 +276,17 @@ public class StudyTracker extends JFrame {
         chartCard.add(chartPanel);
         chartCard.setMinimumSize(new Dimension(160, 200));
 
-        JScrollPane progressScroll = new JScrollPane(buildProgressCard(),
+        JPanel leftBottom = new JPanel();
+        leftBottom.setLayout(new BoxLayout(leftBottom, BoxLayout.Y_AXIS));
+        leftBottom.setOpaque(false);
+        JComponent gc = buildGoalsCard();    gc.setAlignmentX(Component.LEFT_ALIGNMENT);
+        JComponent pc = buildProgressCard(); pc.setAlignmentX(Component.LEFT_ALIGNMENT);
+        leftBottom.add(gc);
+        leftBottom.add(Box.createVerticalStrut(12));
+        leftBottom.add(pc);
+        leftBottom.add(Box.createVerticalGlue());
+
+        JScrollPane progressScroll = new JScrollPane(leftBottom,
                 JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED,
                 JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
         progressScroll.setBorder(null);
@@ -289,8 +301,8 @@ public class StudyTracker extends JFrame {
         progressHolder.add(progressScroll, BorderLayout.CENTER);
 
         JSplitPane leftSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT, chartCard, progressHolder);
-        leftSplit.setResizeWeight(0.52);   // gráfico em cima, progresso embaixo (com scroll)
-        leftSplit.setDividerLocation(0.52);
+        leftSplit.setResizeWeight(0.46);   // gráfico em cima, metas+progresso embaixo (com scroll)
+        leftSplit.setDividerLocation(0.46);
         leftSplit.setDividerSize(4);
         leftSplit.setBorder(null);
         leftSplit.setOpaque(false);
@@ -434,6 +446,122 @@ public class StudyTracker extends JFrame {
     }
 
     // ── CARTÃO DE PROGRESSO ──────────────────────────────────────────────────
+
+    /** Cartão "Metas" — visão rápida das metas de todas as matérias. */
+    private JComponent buildGoalsCard() {
+        goalsCard = new RoundedPanel(18, AppTheme.SURFACE);
+        goalsCard.setLayout(new BorderLayout(0, 8));
+        goalsCard.setBorder(new EmptyBorder(14, 16, 14, 16));
+
+        JLabel title = new JLabel("Metas");
+        title.setFont(AppTheme.FONT_SECTION);
+        title.setForeground(AppTheme.TEXT_PRI);
+
+        StyledButton manage = new StyledButton("Gerenciar…", StyledButton.Variant.TEXT);
+        manage.setFont(AppTheme.FONT_SMALL);
+        manage.addActionListener(e -> showManageGoalsDialog());
+
+        JPanel head = new JPanel(new BorderLayout());
+        head.setOpaque(false);
+        head.add(title,  BorderLayout.WEST);
+        head.add(manage, BorderLayout.EAST);
+        goalsCard.add(head, BorderLayout.NORTH);
+
+        goalsBody = new JPanel();
+        goalsBody.setLayout(new BoxLayout(goalsBody, BoxLayout.Y_AXIS));
+        goalsBody.setOpaque(false);
+        goalsCard.add(goalsBody, BorderLayout.CENTER);
+
+        return goalsCard;
+    }
+
+    /** Uma linha resumida de metas de uma matéria. */
+    private void refreshGoalsCard() {
+        if (goalsBody == null) return;
+        goalsBody.removeAll();
+        for (Map.Entry<String, StudyData> e : studyDataMap.entrySet()) {
+            String s = e.getKey();
+            if (archived.contains(s)) continue;
+            int d = goals.getOrDefault(s, 0);
+            int w = weeklyGoalFor(s);
+            int m = monthlyGoalFor(s);
+
+            JPanel row = new JPanel(new BorderLayout(8, 0));
+            row.setOpaque(false);
+            row.setAlignmentX(Component.LEFT_ALIGNMENT);
+            row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 20));
+
+            JPanel dotName = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+            dotName.setOpaque(false);
+            dotName.add(colorDot(e.getValue().getColor()));
+            JLabel nm = new JLabel(s);
+            nm.setFont(AppTheme.FONT_LABEL);
+            nm.setForeground(AppTheme.TEXT_PRI);
+            dotName.add(nm);
+
+            JLabel val = new JLabel(d <= 0 && w <= 0 && m <= 0
+                    ? "sem meta"
+                    : "Dia " + fmtHM(Math.max(0, d)) + "  ·  Sem " + fmtHM(w) + "  ·  Mês " + fmtHM(m));
+            val.setFont(AppTheme.FONT_SMALL);
+            val.setForeground(d <= 0 && w <= 0 && m <= 0 ? AppTheme.TEXT_MUT : AppTheme.TEXT_SEC);
+            val.setHorizontalAlignment(SwingConstants.RIGHT);
+
+            row.add(dotName, BorderLayout.WEST);
+            row.add(val,     BorderLayout.EAST);
+            goalsBody.add(row);
+            goalsBody.add(Box.createVerticalStrut(4));
+        }
+        goalsBody.revalidate();
+        goalsBody.repaint();
+    }
+
+    /** Diálogo para limpar as metas de várias matérias de uma vez. */
+    private void showManageGoalsDialog() {
+        List<String> ativas = new ArrayList<>();
+        for (String s : studyDataMap.keySet()) if (!archived.contains(s)) ativas.add(s);
+
+        JPanel panel = new JPanel(new GridBagLayout());
+        GridBagConstraints c = new GridBagConstraints();
+        c.gridx = 0; c.anchor = GridBagConstraints.WEST; c.fill = GridBagConstraints.HORIZONTAL;
+        c.weightx = 1; c.insets = new Insets(2, 2, 2, 2);
+        int row = 0;
+
+        c.gridy = row++; panel.add(dlgLabel("Marque as matérias para limpar as metas:", true), c);
+
+        Map<String, JCheckBox> cbs = new LinkedHashMap<>();
+        for (String s : ativas) {
+            int d = goals.getOrDefault(s, 0), w = weeklyGoalFor(s), mo = monthlyGoalFor(s);
+            boolean temMeta = d > 0 || w > 0 || mo > 0;
+            JCheckBox cb = new JCheckBox(s + "   —   " + (temMeta
+                    ? "Dia " + fmtHM(Math.max(0, d)) + " · Sem " + fmtHM(w) + " · Mês " + fmtHM(mo)
+                    : "sem meta"));
+            cb.setEnabled(temMeta);
+            cbs.put(s, cb);
+            c.gridy = row++; panel.add(cb, c);
+        }
+
+        JButton todas = new JButton("Marcar todas com meta");
+        todas.setFont(AppTheme.FONT_SMALL);
+        todas.setFocusPainted(false);
+        todas.addActionListener(e -> cbs.values().forEach(cb -> { if (cb.isEnabled()) cb.setSelected(true); }));
+        c.gridy = row++; c.fill = GridBagConstraints.NONE; c.insets = new Insets(8, 2, 2, 2);
+        panel.add(todas, c);
+
+        int r = JOptionPane.showConfirmDialog(this, panel, "Gerenciar metas",
+                JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+        if (r != JOptionPane.OK_OPTION) return;
+
+        int n = 0;
+        for (Map.Entry<String, JCheckBox> e : cbs.entrySet()) {
+            if (!e.getValue().isSelected()) continue;
+            String s = e.getKey();
+            goals.remove(s); goalsWeek.remove(s); goalsMonth.remove(s);
+            n++;
+        }
+        if (n == 0) { toast("Nenhuma matéria marcada."); return; }
+        updateUI();
+        toast(n == 1 ? "Metas de 1 matéria limpas." : "Metas de " + n + " matérias limpas.");
+    }
 
     private JComponent buildProgressCard() {
         progressCard = new RoundedPanel(18, AppTheme.SURFACE);
@@ -1993,6 +2121,7 @@ public class StudyTracker extends JFrame {
         }
         updateGoalProgress();
         refreshStreaks();
+        refreshGoalsCard();
         refreshProgressCard();
         updatePomodoroCount();
         saveData();
