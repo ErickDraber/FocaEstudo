@@ -128,9 +128,12 @@ public class StudyTracker extends JFrame {
     private String balanceNudgeWeek = null;   // ISO "2026-W37" da última vez que avisou desequilíbrio
 
     // --- Metas (em minutos, por matéria; 0 = sem meta) ---
-    private final Map<String, Integer> goals      = new LinkedHashMap<>(); // diária
+    private final Map<String, Integer> goals      = new LinkedHashMap<>(); // diária IDEAL
+    private final Map<String, Integer> goalsMin   = new LinkedHashMap<>(); // diária MÍNIMA (ausente = = ideal)
     private final Map<String, Integer> goalsWeek  = new LinkedHashMap<>(); // semanal
     private final Map<String, Integer> goalsMonth = new LinkedHashMap<>(); // mensal
+    // Dias marcados como "difícil" (ISO date): não cobram, não quebram a sequência.
+    private final java.util.Set<String> hardDays = new java.util.LinkedHashSet<>();
 
     // Dias da semana em que a meta diária vale (ISO: 1=seg … 7=dom). Ausente = todos os dias.
     private final Map<String, java.util.Set<java.time.DayOfWeek>> goalDays = new LinkedHashMap<>();
@@ -510,7 +513,38 @@ public class StudyTracker extends JFrame {
     private void refreshNowCard() {
         if (nowBody == null) return;
         nowBody.removeAll();
+        LocalDate hoje = LocalDate.now();
+
+        if (isHardDay(hoje)) {
+            JPanel p = new JPanel();
+            p.setLayout(new BoxLayout(p, BoxLayout.Y_AXIS));
+            p.setOpaque(false);
+            JLabel l = new JLabel("😮‍💨 Dia difícil — sem cobrança hoje.");
+            l.setFont(AppTheme.FONT_LABEL); l.setForeground(AppTheme.TEXT_SEC);
+            l.setAlignmentX(Component.LEFT_ALIGNMENT);
+            StyledButton undo = new StyledButton("desfazer", StyledButton.Variant.TEXT);
+            undo.setFont(AppTheme.FONT_SMALL);
+            undo.setAlignmentX(Component.LEFT_ALIGNMENT);
+            undo.addActionListener(e -> { hardDays.remove(hoje.toString()); updateUI(); });
+            p.add(l); p.add(undo);
+            nowBody.add(p, BorderLayout.CENTER);
+            nowBody.revalidate(); nowBody.repaint();
+            return;
+        }
+
         String[] sug = nextSuggestion();
+        JPanel south = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+        south.setOpaque(false);
+        StyledButton hard = new StyledButton("hoje tá difícil?", StyledButton.Variant.TEXT);
+        hard.setFont(AppTheme.FONT_SMALL);
+        hard.addActionListener(e -> {
+            hardDays.add(hoje.toString());
+            updateUI();
+            toast("Ok, hoje não cobra. Descansa. 🫶");
+        });
+        south.add(hard);
+        nowBody.add(south, BorderLayout.SOUTH);
+
         if (sug == null) {
             JLabel l = new JLabel("Tudo em dia por aqui. 🎉");
             l.setFont(AppTheme.FONT_LABEL); l.setForeground(AppTheme.TEXT_SEC);
@@ -731,6 +765,7 @@ public class StudyTracker extends JFrame {
     private void balanceNudge() {
         if (!ready) return;
         LocalDate today = LocalDate.now();
+        if (isHardDay(today)) return;
         if (today.getDayOfWeek().getValue() < 4) return;   // só de quinta em diante
         java.time.temporal.WeekFields wf = java.time.temporal.WeekFields.ISO;
         String semana = today.get(wf.weekBasedYear()) + "-W" + today.get(wf.weekOfWeekBasedYear());
@@ -856,7 +891,7 @@ public class StudyTracker extends JFrame {
         for (Map.Entry<String, JCheckBox> e : cbs.entrySet()) {
             if (!e.getValue().isSelected()) continue;
             String s = e.getKey();
-            goals.remove(s); goalsWeek.remove(s); goalsMonth.remove(s);
+            goals.remove(s); goalsMin.remove(s); goalsWeek.remove(s); goalsMonth.remove(s);
             n++;
         }
         if (n == 0) { toast("Nenhuma matéria marcada."); return; }
@@ -1638,10 +1673,11 @@ public class StudyTracker extends JFrame {
         int goal = goals.getOrDefault(subject, 0);
         if (goal <= 0) return;
         final String msg;
-        if (before < goal && after >= goal) {
-            msg = "🎯 Meta diária de " + subject + " batida!  (" + fmtHM(after) + ")";
-        } else if (after < goal && goal - after <= 15) {
-            msg = "Faltam " + (goal - after) + " min para a meta de " + subject + " hoje 💪";
+        int alvo = dailyMinFor(subject);   // celebra ao bater o MÍNIMO
+        if (before < alvo && after >= alvo) {
+            msg = "🎯 Você bateu a meta de " + subject + " hoje!  (" + fmtHM(after) + ")";
+        } else if (!isHardDay(LocalDate.now()) && after < alvo && alvo - after <= 15) {
+            msg = "Faltam " + (alvo - after) + " min para a meta de " + subject + " hoje 💪";
         } else {
             return;
         }
@@ -1708,25 +1744,40 @@ public class StudyTracker extends JFrame {
         return goals.getOrDefault(subject, 0);
     }
 
+    /** Meta diária MÍNIMA (bater isso já mantém a sequência). Ausente ⇒ igual ao ideal. */
+    private int dailyMinFor(String subject) {
+        if (subject == null) {
+            int sum = 0;
+            for (String s : studyDataMap.keySet())
+                if (!archived.contains(s) && goals.getOrDefault(s, 0) > 0) sum += dailyMinFor(s);
+            return sum;
+        }
+        int ideal = goals.getOrDefault(subject, 0);
+        if (ideal <= 0) return 0;
+        return Math.max(1, Math.min(ideal, goalsMin.getOrDefault(subject, ideal)));
+    }
+
+    private boolean isHardDay(LocalDate d) { return hardDays.contains(d.toString()); }
+
     /**
      * Sequência atual: dias consecutivos (terminando hoje) com minutos ≥ meta diária.
      * Graça: se hoje ainda não bateu, a sequência não quebra — conta-se a partir de ontem.
      * Folga: 1 dia abaixo da meta é tolerado a cada janela de 7 dias da sequência.
      */
     private int currentStreak(String subject) {
-        int goal = dailyGoalFor(subject);
+        int goal = dailyMinFor(subject);   // basta bater o MÍNIMO
         if (goal <= 0) return 0;
         LocalDate cursor = LocalDate.now();
-        while (!isGoalDay(subject, cursor)) cursor = cursor.minusDays(1);       // último dia agendado
+        while (!isGoalDay(subject, cursor) || isHardDay(cursor)) cursor = cursor.minusDays(1);
         if (minutesOnDay(subject, cursor) < goal) {                            // graça: pula p/ o anterior agendado
-            do { cursor = cursor.minusDays(1); } while (!isGoalDay(subject, cursor));
+            do { cursor = cursor.minusDays(1); } while (!isGoalDay(subject, cursor) || isHardDay(cursor));
         }
         if (minutesOnDay(subject, cursor) < goal) return 0;                     // nem esse bateu
 
         int streak = 0, missesNaJanela = 0;
         java.util.ArrayDeque<Boolean> janela = new java.util.ArrayDeque<>();    // últimos 7 dias contados
         while (streak < 3650) {
-            if (!isGoalDay(subject, cursor)) { cursor = cursor.minusDays(1); continue; } // descanso
+            if (!isGoalDay(subject, cursor) || isHardDay(cursor)) { cursor = cursor.minusDays(1); continue; }
             boolean bateu = minutesOnDay(subject, cursor) >= goal;
             if (!bateu && missesNaJanela >= 1) break;                           // 2ª falha em 7 dias
             streak++;
@@ -1785,6 +1836,7 @@ public class StudyTracker extends JFrame {
         if (subject == null) { toast("Selecione uma matéria!"); return; }
 
         JTextField fDay   = goalField(goals.getOrDefault(subject, 0));
+        JTextField fMin   = goalField(goalsMin.getOrDefault(subject, 0));
         JTextField fWeek  = goalField(goalsWeek.getOrDefault(subject, 0));
         JTextField fMonth = goalField(goalsMonth.getOrDefault(subject, 0));
 
@@ -1794,9 +1846,13 @@ public class StudyTracker extends JFrame {
         c.anchor = GridBagConstraints.WEST;
 
         int row = 0;
-        addFormRow(panel, c, row++, "Meta diária:",  fDay);
+        addFormRow(panel, c, row++, "Meta diária (ideal):", fDay);
+        addFormRow(panel, c, row++, "Mínimo aceitável:",    fMin);
         addFormRow(panel, c, row++, "Meta semanal:", fWeek);
         addFormRow(panel, c, row++, "Meta mensal:",  fMonth);
+        c.gridx = 0; c.gridy = row++; c.gridwidth = 2; c.insets = new Insets(0, 3, 8, 3);
+        panel.add(dlgHint("Bater o mínimo já mantém a sequência. Vazio = mínimo igual ao ideal."), c);
+        c.gridwidth = 1; c.insets = new Insets(3, 3, 3, 3);
 
         c.gridx = 0; c.gridy = row++; c.gridwidth = 2; c.weightx = 1;
         c.fill = GridBagConstraints.HORIZONTAL; c.insets = new Insets(2, 3, 4, 3);
@@ -1807,7 +1863,7 @@ public class StudyTracker extends JFrame {
         btnLimpar.setMargin(new Insets(2, 8, 2, 8));
         btnLimpar.setFocusPainted(false);
         btnLimpar.setToolTipText("Zera meta diária, semanal e mensal desta matéria");
-        btnLimpar.addActionListener(e -> { fDay.setText(""); fWeek.setText(""); fMonth.setText(""); });
+        btnLimpar.addActionListener(e -> { fDay.setText(""); fMin.setText(""); fWeek.setText(""); fMonth.setText(""); });
         JPanel limparRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
         limparRow.add(btnLimpar);
         c.gridy = row++; c.insets = new Insets(0, 3, 10, 3);
@@ -1955,7 +2011,10 @@ public class StudyTracker extends JFrame {
             }
         }
 
+        int gMin;
+        try { gMin = parseDuration(fMin.getText()); } catch (IllegalArgumentException ex) { gMin = 0; }
         goals.put(subject, gDay);
+        if (gMin > 0 && gMin < gDay) goalsMin.put(subject, gMin); else goalsMin.remove(subject);
         goalsWeek.put(subject, gWeek);
         goalsMonth.put(subject, gMonth);
         updateUI();
@@ -2212,6 +2271,7 @@ public class StudyTracker extends JFrame {
         }
         studyDataMap.put(nw, d);
         if (goals.containsKey(old))      { goals.put(nw, goals.remove(old)); }
+        if (goalsMin.containsKey(old))   { goalsMin.put(nw, goalsMin.remove(old)); }
         if (goalsWeek.containsKey(old))  { goalsWeek.put(nw, goalsWeek.remove(old)); }
         if (goalsMonth.containsKey(old)) { goalsMonth.put(nw, goalsMonth.remove(old)); }
         if (streakBest.containsKey(old)) { streakBest.put(nw, streakBest.remove(old)); }
@@ -2259,7 +2319,7 @@ public class StudyTracker extends JFrame {
     private void deleteSubject() {
         String s = (String) subjectComboBox.getSelectedItem(); if (s == null) return;
         int r = JOptionPane.showConfirmDialog(this, "Deletar \"" + s + "\"? Todo o tempo será perdido.", "Deletar Matéria", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
-        if (r == JOptionPane.YES_OPTION) { studyDataMap.remove(s); goals.remove(s); goalsWeek.remove(s); goalsMonth.remove(s); streakBest.remove(s); goalDays.remove(s); examDate.remove(s); archived.remove(s); areaType.remove(s); subFocos.remove(s); checklist.removeIf(it -> it.subject.equals(s)); saveChecklist(); refreshCombo(); updateUI(); }
+        if (r == JOptionPane.YES_OPTION) { studyDataMap.remove(s); goals.remove(s); goalsMin.remove(s); goalsWeek.remove(s); goalsMonth.remove(s); streakBest.remove(s); goalDays.remove(s); examDate.remove(s); archived.remove(s); areaType.remove(s); subFocos.remove(s); checklist.removeIf(it -> it.subject.equals(s)); saveChecklist(); refreshCombo(); updateUI(); }
     }
 
     // ── HISTÓRICO ───────────────────────────────────────────────────────────
@@ -2362,7 +2422,7 @@ public class StudyTracker extends JFrame {
     /** Recarrega tudo dos arquivos (após importar). */
     private void reloadFromDisk() {
         studyDataMap.clear(); sessions.clear(); checklist.clear();
-        goals.clear(); goalsWeek.clear(); goalsMonth.clear();
+        goals.clear(); goalsMin.clear(); goalsWeek.clear(); goalsMonth.clear(); hardDays.clear();
         goalDays.clear(); examDate.clear(); archived.clear();
         areaType.clear(); typeGoalWeek.clear(); subFocos.clear();
         streakBest.clear(); unknownProps.clear();
@@ -2662,6 +2722,8 @@ public class StudyTracker extends JFrame {
         areaType.forEach((k, v) -> { if (!"estudo".equals(v)) p.setProperty("type_" + k, v); });
         typeGoalWeek.forEach((k, v) -> { if (v > 0) p.setProperty("typegoalw_" + k, String.valueOf(v)); });
         subFocos.forEach((k, list) -> { if (!list.isEmpty()) p.setProperty("subfocos_" + k, String.join(",", list)); });
+        goalsMin.forEach((k, v) -> { if (v > 0) p.setProperty("goalmin_" + k, String.valueOf(v)); });
+        if (!hardDays.isEmpty()) p.setProperty("__hard_days__", String.join(",", hardDays));
         if (balanceNudgeWeek != null) p.setProperty("__balance_nudge_week__", balanceNudgeWeek);
         if (!archived.isEmpty()) p.setProperty("__archived__", String.join(",", archived));
         streakBest.forEach((k, v) -> p.setProperty("streakbest_" + k, String.valueOf(v)));
@@ -2810,6 +2872,14 @@ public class StudyTracker extends JFrame {
                     continue;
                 }
                 if (k.equals("__balance_nudge_week__")) { balanceNudgeWeek = p.getProperty(k); continue; }
+                if (k.equals("__hard_days__")) {
+                    for (String d : p.getProperty(k).split(",")) if (!d.trim().isEmpty()) hardDays.add(d.trim());
+                    continue;
+                }
+                if (k.startsWith("goalmin_")) {
+                    try { goalsMin.put(k.substring(8), Integer.parseInt(p.getProperty(k))); } catch (Exception ignored) {}
+                    continue;
+                }
                 if (k.startsWith("goal_")) {
                     try { goals.put(k.substring(5), Integer.parseInt(p.getProperty(k))); } catch (Exception ignored) {}
                     continue;
@@ -2974,6 +3044,7 @@ public class StudyTracker extends JFrame {
         LocalDate today = LocalDate.now();
         String hoje = today.toString();
         if (hoje.equals(reminderShownDay)) return;
+        if (isHardDay(today)) { reminderShownDay = hoje; return; }             // dia difícil: sem lembrete
         if (java.time.LocalTime.now().getHour() < setReminderHour) return;
         if (minutesOnDay(null, today) > 0) { reminderShownDay = hoje; return; } // já estudou hoje
 
