@@ -103,6 +103,9 @@ public class StudyTracker extends JFrame {
     // --- Nota + tipo de atividade aplicados à próxima sessão salva ---
     private JTextField noteField;
     private JComboBox<String> kindCombo;
+    private JComboBox<String> energyCombo;
+    private static final String[] ENERGY_LABELS = {"–", "😴 baixa", "🙂 ok", "🔥 alta"};
+    private static final String[] ENERGY_ICON   = {"", "😴", "🙂", "🔥"};
     private static final String[] KIND_LABELS = {"–", "Teoria", "Exercícios", "Revisão", "Outro"};
     private static final String[] KIND_KEYS   = {"", "teoria", "exercicios", "revisao", "outro"};
     private static final String KIND_MANAGE = "＋ gerenciar sub-focos…";
@@ -457,9 +460,16 @@ public class StudyTracker extends JFrame {
             }
         });
         kindLbl.setText("Sub-foco:");
+        JLabel enLbl = new JLabel("Energia:");
+        enLbl.setFont(AppTheme.FONT_BOLD); enLbl.setForeground(AppTheme.TEXT_PRI);
+        energyCombo = new JComboBox<>(ENERGY_LABELS);
+        styleInput(energyCombo);
+        energyCombo.setToolTipText("Como estava sua energia nesta sessão");
         noteRow.add(noteLbl); noteRow.add(noteField);
         noteRow.add(Box.createHorizontalStrut(6));
         noteRow.add(kindLbl); noteRow.add(kindCombo);
+        noteRow.add(Box.createHorizontalStrut(6));
+        noteRow.add(enLbl); noteRow.add(energyCombo);
 
         // Barra de meta (oculta por padrão)
         goalBar = new JPanel(new BorderLayout(8, 0));
@@ -564,8 +574,10 @@ public class StudyTracker extends JFrame {
             StyledButton go = new StyledButton("▶ Começar", StyledButton.Variant.FILLED);
             go.setFont(AppTheme.FONT_SMALL);
             final String area = sug[0];
+            final String sf = sug.length > 2 ? sug[2] : null;
             go.addActionListener(e -> {
-                subjectComboBox.setSelectedItem(area);
+                subjectComboBox.setSelectedItem(area);        // dispara refreshKindCombo
+                if (sf != null && kindCombo != null) kindCombo.setSelectedItem(sf);
                 if (bottomTabs != null) bottomTabs.select(0);   // aba Cronômetro
                 startStopwatch();
             });
@@ -600,6 +612,27 @@ public class StudyTracker extends JFrame {
             }
         }
         if (best != null) return new String[]{best, reason};
+
+        // 1b. rodízio: área de Físico com grupo (sub-foco) parado há mais tempo
+        String rArea = null, rSf = null; long oldestSf = Long.MAX_VALUE;
+        for (String s : studyDataMap.keySet()) {
+            if (archived.contains(s) || !"fisico".equals(typeOf(s))) continue;
+            for (String grupo : subFocos.getOrDefault(s, java.util.Collections.emptyList())) {
+                long last = 0;
+                for (StudySession se : sessions)
+                    if (se.getSubject().equals(s) && grupo.equalsIgnoreCase(se.getKind()))
+                        last = Math.max(last, se.getTimestamp());
+                if (last < oldestSf) { oldestSf = last; rArea = s; rSf = grupo; }
+            }
+        }
+        if (rArea != null) {
+            long dias = oldestSf == 0 ? -1
+                    : java.time.temporal.ChronoUnit.DAYS.between(dateOf(oldestSf), today);
+            if (oldestSf == 0 || dias >= 3)
+                return new String[]{rArea,
+                        oldestSf == 0 ? "treinar " + rSf + " — ainda não treinou" : "treinar " + rSf + " — faz " + dias + " dias",
+                        rSf};
+        }
 
         // 2. tipo com meta de equilíbrio zerada na semana
         LocalDate ws = weekStart(today);
@@ -1658,10 +1691,12 @@ public class StudyTracker extends JFrame {
             Object sel = kindCombo.getSelectedItem();
             if (sel != null && !"–".equals(sel) && !KIND_MANAGE.equals(sel)) kind = sel.toString();
         }
+        int energy = energyCombo == null ? 0 : Math.max(0, energyCombo.getSelectedIndex());
         studyDataMap.get(subject).addMinutes(minutes);
-        sessions.add(new StudySession(subject, minutes, System.currentTimeMillis(), type, note, kind));
+        sessions.add(new StudySession(subject, minutes, System.currentTimeMillis(), type, note, kind, energy));
         if (noteField != null) noteField.setText("");
         if (kindCombo != null && kindCombo.getItemCount() > 0) kindCombo.setSelectedIndex(0);
+        if (energyCombo != null) energyCombo.setSelectedIndex(0);
         updateUI();
         saveData(); saveSessions();
 

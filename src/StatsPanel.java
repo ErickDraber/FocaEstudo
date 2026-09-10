@@ -39,8 +39,14 @@ public class StatsPanel extends JDialog {
             body.add(monthChart());
             body.add(Box.createVerticalStrut(18));
 
-            body.add(section("Por tipo de atividade"));
+            body.add(section("Por sub-foco"));
             body.add(kindChart());
+
+            if (sessions.stream().anyMatch(s -> s.getEnergy() > 0)) {
+                body.add(Box.createVerticalStrut(18));
+                body.add(section("Energia por horário"));
+                body.add(energyChart());
+            }
         }
 
         JScrollPane sc = new JScrollPane(body);
@@ -115,6 +121,47 @@ public class StatsPanel extends JDialog {
             mins[i] = es.get(i).getValue();
         }
         return bars(nomes, mins, new Color(0xFFA726));
+    }
+
+    /** Energia média por faixa de horário (manhã/tarde/noite/madrugada). */
+    private JComponent energyChart() {
+        String[] faixas = {"Madrugada", "Manhã", "Tarde", "Noite"};
+        int[] soma = new int[4], cont = new int[4];
+        for (StudySession s : sessions) {
+            if (s.getEnergy() <= 0) continue;
+            int hr = Instant.ofEpochMilli(s.getTimestamp()).atZone(ZoneId.systemDefault()).getHour();
+            int f = hr < 5 ? 0 : hr < 12 ? 1 : hr < 18 ? 2 : 3;
+            soma[f] += s.getEnergy(); cont[f]++;
+        }
+        JPanel p = new JPanel();
+        p.setLayout(new BoxLayout(p, BoxLayout.Y_AXIS));
+        p.setOpaque(false);
+        p.setAlignmentX(Component.LEFT_ALIGNMENT);
+        String[] icons = {"", "😴", "🙂", "🔥"};
+        for (int i = 0; i < 4; i++) {
+            JPanel row = new JPanel(new BorderLayout(8, 0));
+            row.setOpaque(false);
+            row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 20));
+            JLabel l = new JLabel(faixas[i]);
+            l.setFont(AppTheme.FONT_SMALL); l.setForeground(AppTheme.TEXT_SEC);
+            l.setPreferredSize(new Dimension(90, 16));
+            String v;
+            if (cont[i] == 0) v = "—";
+            else {
+                double avg = soma[i] / (double) cont[i];
+                int rounded = (int) Math.round(avg);
+                v = icons[Math.max(1, Math.min(3, rounded))]
+                        + "  (" + (cont[i] == 1 ? "1 sessão" : cont[i] + " sessões") + ")";
+            }
+            JLabel val = new JLabel(v);
+            val.setFont(AppTheme.FONT_LABEL);
+            val.setForeground(cont[i] == 0 ? AppTheme.TEXT_MUT : AppTheme.TEXT_PRI);
+            row.add(l, BorderLayout.WEST);
+            row.add(val, BorderLayout.CENTER);
+            p.add(row);
+            p.add(Box.createVerticalStrut(4));
+        }
+        return p;
     }
 
     /** Uma coluna de barras horizontais rótulo · barra · tempo. */

@@ -132,6 +132,7 @@ public class HistoryPanel extends JDialog {
                 default         -> "Cronômetro";
             };
             if (!s.getKind().isEmpty()) typeLabel += " · " + kindLabel(s.getKind());
+            if (s.getEnergy() > 0) typeLabel += "  " + new String[]{"", "😴", "🙂", "🔥"}[s.getEnergy()];
             JLabel type = new JLabel(typeLabel);
             type.setFont(AppTheme.FONT_SMALL); type.setForeground(AppTheme.TEXT_SEC);
             type.setAlignmentX(Component.RIGHT_ALIGNMENT);
@@ -237,7 +238,7 @@ public class HistoryPanel extends JDialog {
         int idx = sessions.indexOf(s);
         if (idx < 0) return;
         StudySession ns = new StudySession(newSubj, newMin, newTs, s.getType(),
-                fNote.getText().trim(), fKind.getText().trim());
+                fNote.getText().trim(), fKind.getText().trim(), s.getEnergy());
         sessions.set(idx, ns);
 
         // ajusta totais das matérias
