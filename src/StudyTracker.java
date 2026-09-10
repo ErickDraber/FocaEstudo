@@ -44,7 +44,7 @@ public class StudyTracker extends JFrame {
     private JComboBox<String> subjectComboBox;
     private JLabel        tvTotal;
     private JPanel        goalBar;
-    private JProgressBar  goalProgress;
+    private GaugeBar      goalProgress;
     private JLabel        tvGoalLabel, tvGoalPercent;
     private RoundedPanel  progressCard;
     private JPanel        progressBody;
@@ -311,7 +311,7 @@ public class StudyTracker extends JFrame {
         JPanel chartWrapper = new JPanel(new BorderLayout());
         chartWrapper.setBackground(AppTheme.BG);
         chartWrapper.setBorder(new EmptyBorder(12, 12, 6, 6));
-        chartPanel = new PieChartPanel(studyDataMap);
+        chartPanel = new PieChartPanel();
         chartPanel.setBorder(new EmptyBorder(8, 8, 8, 8));
         RoundedPanel chartCard = new RoundedPanel(18, AppTheme.SURFACE);
         chartCard.setLayout(new BorderLayout());
@@ -487,12 +487,8 @@ public class StudyTracker extends JFrame {
         tvGoalLabel.setFont(AppTheme.FONT_SMALL); tvGoalLabel.setForeground(AppTheme.TEXT_SEC);
         tvGoalPercent = new JLabel("0%");
         tvGoalPercent.setFont(AppTheme.FONT_SMALL); tvGoalPercent.setForeground(AppTheme.ACCENT);
-        goalProgress = new JProgressBar(0, 100);
-        goalProgress.setStringPainted(false);
-        goalProgress.setForeground(AppTheme.ACCENT);
-        goalProgress.setBackground(AppTheme.SURFACE2);
-        goalProgress.setPreferredSize(new Dimension(0, 6));
-        goalProgress.setBorderPainted(false);
+        goalProgress = new GaugeBar();
+        goalProgress.setPreferredSize(new Dimension(0, 8));
 
         JPanel gpRow = new JPanel(new BorderLayout(4, 0));
         gpRow.setOpaque(false);
@@ -1085,11 +1081,14 @@ public class StudyTracker extends JFrame {
     }
 
     private void addPeriodRows(String subject, LocalDate today) {
-        progressBody.add(periodRow("Dia",    minutesOnDay(subject, today),                         dailyGoalFor(subject)));
+        Color base = subject == null
+                ? AppTheme.ACCENT
+                : studyDataMap.getOrDefault(subject, new StudyData(0, AppTheme.ACCENT)).getColor();
+        progressBody.add(periodRow("Dia",    minutesOnDay(subject, today),                         dailyGoalFor(subject),   base));
         progressBody.add(Box.createVerticalStrut(4));
-        progressBody.add(periodRow("Semana", minutesInRange(subject, weekStart(today),  today),    weeklyGoalFor(subject)));
+        progressBody.add(periodRow("Semana", minutesInRange(subject, weekStart(today),  today),    weeklyGoalFor(subject),  base));
         progressBody.add(Box.createVerticalStrut(4));
-        progressBody.add(periodRow("Mês",    minutesInRange(subject, monthStart(today), today),    monthlyGoalFor(subject)));
+        progressBody.add(periodRow("Mês",    minutesInRange(subject, monthStart(today), today),    monthlyGoalFor(subject), base));
         progressBody.add(Box.createVerticalStrut(4));
         progressBody.add(insightLine(subject, today));
     }
@@ -1219,8 +1218,9 @@ public class StudyTracker extends JFrame {
         return p;
     }
 
-    /** Uma barra de período: rótulo · barra · "atual / meta  pct%". */
-    private JPanel periodRow(String label, int current, int goal) {
+    /** Uma barra de período: rótulo · barra · "atual / meta  pct%". A barra usa
+     *  a cor da meta em níveis (tom escuro → claro) para mostrar o quanto falta. */
+    private JPanel periodRow(String label, int current, int goal, Color base) {
         JPanel row = new JPanel(new BorderLayout(8, 0));
         row.setOpaque(false);
         row.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -1231,11 +1231,8 @@ public class StudyTracker extends JFrame {
         lbl.setForeground(AppTheme.TEXT_SEC);
         lbl.setPreferredSize(new Dimension(56, 18));
 
-        JProgressBar bar = new JProgressBar(0, 100);
-        bar.setStringPainted(false);
-        bar.setBorderPainted(false);
-        bar.setBackground(AppTheme.SURFACE2);
-        bar.setPreferredSize(new Dimension(0, 6));
+        GaugeBar bar = new GaugeBar();
+        bar.setPreferredSize(new Dimension(0, 8));
 
         JLabel val = new JLabel();
         val.setFont(AppTheme.FONT_SMALL);
@@ -1243,15 +1240,14 @@ public class StudyTracker extends JFrame {
         val.setPreferredSize(new Dimension(120, 18));
 
         if (goal <= 0) {
-            bar.setValue(0);
-            bar.setForeground(AppTheme.SURFACE2);
+            bar.set(0, AppTheme.TEXT_MUT, false);
             val.setText("— sem meta");
             val.setForeground(AppTheme.TEXT_SEC);
         } else {
-            int pct = (int) Math.min(100, current * 100.0 / goal);
+            double frac = current / (double) goal;
             boolean met = current >= goal;
-            bar.setValue(pct);
-            bar.setForeground(met ? AppTheme.SUCCESS : AppTheme.ACCENT);
+            int pct = (int) Math.min(100, frac * 100.0);
+            bar.set(frac, base, met);
             val.setText(fmtHM(current) + " / " + fmtHM(goal) + "   " + (met ? "✓ " : "") + pct + "%");
             val.setForeground(met ? AppTheme.SUCCESS : AppTheme.TEXT_PRI);
         }
@@ -1300,6 +1296,24 @@ public class StudyTracker extends JFrame {
             case "outro":    return new Color(0x8FA0B8);
             default:         return AppTheme.ACCENT;   // estudo
         }
+    }
+
+    /** Monta o donut: um grupo por área (tipo) com suas matérias como sub-áreas. */
+    private java.util.List<PieChartPanel.Group> buildPieGroups() {
+        java.util.List<PieChartPanel.Group> out = new ArrayList<>();
+        for (String type : TYPE_KEYS) {
+            java.util.List<PieChartPanel.Slice> slices = new ArrayList<>();
+            int sum = 0;
+            for (Map.Entry<String, StudyData> e : studyDataMap.entrySet()) {
+                if (!typeOf(e.getKey()).equals(type)) continue;
+                int min = e.getValue().getMinutes();
+                if (min <= 0) continue;
+                slices.add(new PieChartPanel.Slice(e.getKey(), e.getValue().getColor(), min));
+                sum += min;
+            }
+            if (sum > 0) out.add(new PieChartPanel.Group(typeLabel(type), typeColor(type), sum, slices));
+        }
+        return out;
     }
 
     /** Minutos estudados por tipo numa janela de datas [start, end]. */
@@ -2337,7 +2351,9 @@ public class StudyTracker extends JFrame {
         int gh = current / 60, gm = current % 60, goalH = goal / 60, goalM = goal % 60;
         tvGoalLabel.setText(String.format("%dh%02dm / %dh%02dm", gh, gm, goalH, goalM));
         tvGoalPercent.setText(pct + "%");
-        goalProgress.setValue(pct);
+        Color base = studyDataMap.getOrDefault(subject, new StudyData(0, AppTheme.ACCENT)).getColor();
+        tvGoalPercent.setForeground(current >= goal ? AppTheme.SUCCESS : base);
+        goalProgress.set(current / (double) goal, base, current >= goal);
     }
 
     // ── GERENCIAMENTO DE MATÉRIAS ────────────────────────────────────────────
@@ -2714,7 +2730,7 @@ public class StudyTracker extends JFrame {
         summaryPanel.add(buildSummaryRow("TOTAL", new StudyData(total, AppTheme.TEXT_PRI)));
         summaryPanel.revalidate(); summaryPanel.repaint();
 
-        chartPanel.repaint();
+        chartPanel.setGroups(buildPieGroups());
         if (calendarPanel != null) {
             Map<String, Color> colorMap = new LinkedHashMap<>();
             studyDataMap.forEach((k, v) -> colorMap.put(k, v.getColor()));

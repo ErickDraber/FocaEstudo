@@ -44,6 +44,28 @@ public class AppTheme {
         return PALETTE[index % PALETTE.length];
     }
 
+    /** Escurece (f&lt;1) ou clareia em direção ao branco (f&gt;1) mantendo o matiz. */
+    public static Color shade(Color c, double f) {
+        if (f <= 1.0) {
+            f = Math.max(0.0, f);
+            return new Color((int) Math.round(c.getRed()   * f),
+                             (int) Math.round(c.getGreen() * f),
+                             (int) Math.round(c.getBlue()  * f), c.getAlpha());
+        }
+        double t = Math.min(1.0, f - 1.0);
+        return new Color((int) Math.round(c.getRed()   + (255 - c.getRed())   * t),
+                         (int) Math.round(c.getGreen() + (255 - c.getGreen()) * t),
+                         (int) Math.round(c.getBlue()  + (255 - c.getBlue())  * t), c.getAlpha());
+    }
+
+    /** Interpola linearmente entre a e b (t=0 → a, t=1 → b). */
+    public static Color mix(Color a, Color b, double t) {
+        t = Math.max(0.0, Math.min(1.0, t));
+        return new Color((int) Math.round(a.getRed()   + (b.getRed()   - a.getRed())   * t),
+                         (int) Math.round(a.getGreen() + (b.getGreen() - a.getGreen()) * t),
+                         (int) Math.round(a.getBlue()  + (b.getBlue()  - a.getBlue())  * t));
+    }
+
     /** Aplica o tema claro */
     public static void applyLight() {
         dark        = false;
