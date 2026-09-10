@@ -138,6 +138,9 @@ public class StudyTracker extends JFrame {
     // Dias marcados como "difícil" (ISO date): não cobram, não quebram a sequência.
     private final java.util.Set<String> hardDays = new java.util.LinkedHashSet<>();
 
+    // Planejador semanal: chave "<dia 1-7>_<slot m|t|n>" -> nome da área. Ausente = vazio.
+    private final Map<String, String> weekPlan = new LinkedHashMap<>();
+
     // Dias da semana em que a meta diária vale (ISO: 1=seg … 7=dom). Ausente = todos os dias.
     private final Map<String, java.util.Set<java.time.DayOfWeek>> goalDays = new LinkedHashMap<>();
     // Data de prova por matéria (opcional).
@@ -279,6 +282,9 @@ public class StudyTracker extends JFrame {
             saveChecklist(); refreshProgressCard();
         }).setVisible(true));
 
+        StyledButton btnPlanner = new StyledButton("Semana", StyledButton.Variant.TEXT);
+        btnPlanner.addActionListener(e -> openPlanner());
+
         StyledButton btnSettings = new StyledButton("Ajustes", StyledButton.Variant.TEXT);
         btnSettings.addActionListener(e -> showSettingsDialog());
 
@@ -288,6 +294,7 @@ public class StudyTracker extends JFrame {
         right.add(btnHistory);
         right.add(btnStats);
         right.add(btnTasks);
+        right.add(btnPlanner);
         right.add(btnSettings);
         right.add(btnTheme);
 
@@ -930,6 +937,45 @@ public class StudyTracker extends JFrame {
         if (n == 0) { toast("Nenhuma matéria marcada."); return; }
         updateUI();
         toast(n == 1 ? "Metas de 1 matéria limpas." : "Metas de " + n + " matérias limpas.");
+    }
+
+    // ── Planejador semanal (A6) ─────────────────────────────────────────────
+
+    private PlannerPanel plannerWindow;
+
+    private void openPlanner() {
+        List<String> areas = new ArrayList<>();
+        for (String s : studyDataMap.keySet()) if (!archived.contains(s)) areas.add(s);
+        Map<String, Color> colorMap = new LinkedHashMap<>();
+        studyDataMap.forEach((k, v) -> colorMap.put(k, v.getColor()));
+
+        if (plannerWindow != null && plannerWindow.isDisplayable()) {
+            plannerWindow.toFront();
+            plannerWindow.rebuild();
+            return;
+        }
+        plannerWindow = new PlannerPanel(this, areas, colorMap, weekPlan,
+                this::saveData, this::autofillWeekPlan);
+        plannerWindow.setVisible(true);
+    }
+
+    /** Preenche o planejador a partir dos dias de meta de cada área, no 1º slot livre do dia. */
+    private void autofillWeekPlan() {
+        String[] slots = {"m", "t", "n"};
+        for (String s : studyDataMap.keySet()) {
+            if (archived.contains(s)) continue;
+            java.util.Set<java.time.DayOfWeek> dias = goalDays.get(s);
+            if (dias == null || dias.isEmpty()) continue;
+            for (java.time.DayOfWeek dw : dias) {
+                int d = dw.getValue();
+                boolean colocou = false;
+                for (String sl : slots) {
+                    if (!weekPlan.containsKey(d + "_" + sl)) { weekPlan.put(d + "_" + sl, s); colocou = true; break; }
+                }
+                if (!colocou) weekPlan.put(d + "_t", s);
+            }
+        }
+        saveData();
     }
 
     private JComponent buildProgressCard() {
@@ -2319,6 +2365,7 @@ public class StudyTracker extends JFrame {
         if (archived.remove(old))        { archived.add(nw); }
         if (areaType.containsKey(old))   { areaType.put(nw, areaType.remove(old)); }
         if (subFocos.containsKey(old))   { subFocos.put(nw, subFocos.remove(old)); }
+        weekPlan.replaceAll((k, v) -> old.equals(v) ? nw : v);
         for (ChecklistItem it : checklist) if (it.subject.equals(old)) it.subject = nw;
         if (examDate.containsKey(old))   { examDate.put(nw, examDate.remove(old)); }
         refreshCombo(); subjectComboBox.setSelectedItem(nw); saveChecklist(); updateUI();
@@ -2359,7 +2406,7 @@ public class StudyTracker extends JFrame {
     private void deleteSubject() {
         String s = (String) subjectComboBox.getSelectedItem(); if (s == null) return;
         int r = JOptionPane.showConfirmDialog(this, "Deletar \"" + s + "\"? Todo o tempo será perdido.", "Deletar Matéria", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
-        if (r == JOptionPane.YES_OPTION) { studyDataMap.remove(s); goals.remove(s); goalsMin.remove(s); goalsWeek.remove(s); goalsMonth.remove(s); streakBest.remove(s); goalDays.remove(s); examDate.remove(s); archived.remove(s); areaType.remove(s); subFocos.remove(s); checklist.removeIf(it -> it.subject.equals(s)); saveChecklist(); refreshCombo(); updateUI(); }
+        if (r == JOptionPane.YES_OPTION) { studyDataMap.remove(s); goals.remove(s); goalsMin.remove(s); goalsWeek.remove(s); goalsMonth.remove(s); streakBest.remove(s); goalDays.remove(s); examDate.remove(s); archived.remove(s); areaType.remove(s); subFocos.remove(s); weekPlan.values().removeIf(s::equals); checklist.removeIf(it -> it.subject.equals(s)); saveChecklist(); refreshCombo(); updateUI(); }
     }
 
     // ── HISTÓRICO ───────────────────────────────────────────────────────────
@@ -2464,7 +2511,7 @@ public class StudyTracker extends JFrame {
         studyDataMap.clear(); sessions.clear(); checklist.clear();
         goals.clear(); goalsMin.clear(); goalsWeek.clear(); goalsMonth.clear(); hardDays.clear();
         goalDays.clear(); examDate.clear(); archived.clear();
-        areaType.clear(); typeGoalWeek.clear(); subFocos.clear();
+        areaType.clear(); typeGoalWeek.clear(); subFocos.clear(); weekPlan.clear();
         streakBest.clear(); unknownProps.clear();
         streakBestGeneral = 0; celebratedStreakMilestone = 0;
         loadData();
@@ -2764,6 +2811,7 @@ public class StudyTracker extends JFrame {
         subFocos.forEach((k, list) -> { if (!list.isEmpty()) p.setProperty("subfocos_" + k, String.join(",", list)); });
         goalsMin.forEach((k, v) -> { if (v > 0) p.setProperty("goalmin_" + k, String.valueOf(v)); });
         if (!hardDays.isEmpty()) p.setProperty("__hard_days__", String.join(",", hardDays));
+        weekPlan.forEach((k, v) -> { if (v != null && !v.isEmpty()) p.setProperty("plan_" + k, v); });
         if (balanceNudgeWeek != null) p.setProperty("__balance_nudge_week__", balanceNudgeWeek);
         if (!archived.isEmpty()) p.setProperty("__archived__", String.join(",", archived));
         streakBest.forEach((k, v) -> p.setProperty("streakbest_" + k, String.valueOf(v)));
@@ -2909,6 +2957,11 @@ public class StudyTracker extends JFrame {
                 }
                 if (k.startsWith("type_")) {
                     areaType.put(k.substring(5), p.getProperty(k));
+                    continue;
+                }
+                if (k.startsWith("plan_")) {
+                    String v = p.getProperty(k);
+                    if (v != null && !v.trim().isEmpty()) weekPlan.put(k.substring(5), v.trim());
                     continue;
                 }
                 if (k.equals("__balance_nudge_week__")) { balanceNudgeWeek = p.getProperty(k); continue; }

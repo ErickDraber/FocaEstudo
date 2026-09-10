@@ -45,10 +45,15 @@ Tempos = horas de trabalho focado.
 - **Meta por contagem** (nº de sessões), não só tempo: "3 de 4 treinos essa semana".
 - **Energia** rápida ao salvar (😴 🙂 🔥) → campo novo na sessão; Estatística "melhor energia por horário/tipo".
 
-## Etapa A6 — Planejador semanal  (~6–9 h)
+## Etapa A6 — Planejador semanal  (~6–9 h)  ✅ concluída
 
 - Grade seg–dom × blocos; colocar áreas nos horários. Visual, não obriga.
 - Contagem regressiva de prova/entrega com barra de "quanto do plano já cobriu".
+
+**Feito:** `PlannerPanel` (botão "Semana" no topo) — grade 7 dias × Manhã/Tarde/Noite,
+clique na célula escolhe a área (nas cores da área), "Preencher pelos dias da meta"
+usa os `goalDays`, "Limpar tudo". Persiste em `plan_<dia>_<slot>`. A contagem
+regressiva de prova com "plano X/Y" (itens do checklist) já entrou na A6-parcial.
 
 ---
 
