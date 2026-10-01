@@ -19,31 +19,23 @@ Rastreador de estudos com foco, desenvolvido em Java Swing para desktop.
 
 ## Como instalar
 
-### 1. Instale o Java
+### Windows (recomendado — não precisa instalar Java)
 
-O programa precisa do **Java 11 ou superior** para rodar.
+1. Baixe o programa: **[FocaEstudo-Windows.zip](https://github.com/ErickDraber/FocaEstudo/releases/latest/download/FocaEstudo-Windows.zip)**
+2. Clique com o botão direito no arquivo baixado → **Extrair Tudo...** (em Documentos ou na Área de Trabalho)
+3. Abra a pasta **FocaEstudo** e dê dois cliques em **`FocaEstudo.exe`**
+4. Se aparecer "O Windows protegeu o computador", clique em **Mais informações → Executar assim mesmo** (só na primeira vez)
 
-- Acesse: https://www.java.com/pt-BR/download/
-- Baixe e instale normalmente
-- Para verificar se já tem instalado, abra o **Prompt de Comando** e digite:
-  ```
-  java -version
-  ```
-  Se aparecer uma versão, está pronto.
+> ⚠️ Não abra direto de dentro do `.zip` nem coloque a pasta em "Arquivos de Programas" — os dados são salvos na própria pasta do programa.
 
-### 2. Baixe o projeto
+Instruções completas ficam no `LEIA-ME.txt` dentro do zip.
 
-- Acesse: https://github.com/ErickDraber/FocaEstudo
-- Clique em **Code → Download ZIP**
-- Extraia a pasta em qualquer lugar do seu PC
+### A partir do código-fonte
 
-### 3. Execute o programa
+Requer o **JDK 17 ou superior** (ex.: [Eclipse Temurin](https://adoptium.net/pt-BR/)).
 
-- Dentro da pasta extraída, abra a pasta **"Projeto Rastreador de Estudos"**
-- Dê dois cliques no arquivo **`Executar_Programa.bat`**
-- O programa vai compilar e abrir automaticamente
-
-> ⚠️ **Atenção:** Não mova o arquivo `.bat` para fora da pasta — ele precisa estar junto com as pastas `src` e `bin` para funcionar.
+- Clone o repositório e dê dois cliques em **`Executar_Programa.bat`** — ele compila e abre o programa.
+- Para gerar o `.zip` com Java embutido: `powershell -ExecutionPolicy Bypass -File empacotamento\empacotar.ps1 -Versao 1.0.0` (saída em `dist\`).
 
 ---
 
@@ -61,5 +53,5 @@ O programa precisa do **Java 11 ou superior** para rodar.
 
 ## Tecnologias
 
-- Java 11+
+- Java 17+
 - Java Swing

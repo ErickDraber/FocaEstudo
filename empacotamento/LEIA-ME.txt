@@ -1,0 +1,84 @@
+﻿==============================================================
+  FOCAESTUDO — COMO INSTALAR E USAR
+  Rastreador de estudos com cronômetro, Pomodoro, metas e
+  planejador semanal.
+==============================================================
+
+Não precisa instalar o Java nem mais nada: ele já vem junto.
+Funciona no Windows 10 e 11 (64 bits).
+
+
+--------------------------------------------------------------
+ INSTALAR (2 minutos)
+--------------------------------------------------------------
+
+ 1. Clique com o botão direito no FocaEstudo-Windows.zip
+    baixado e escolha "Extrair Tudo...".
+
+ 2. Escolha um lugar fácil, como Documentos ou a Área de
+    Trabalho, e clique em "Extrair".
+
+ 3. Entre na pasta "FocaEstudo" e dê dois cliques em
+    FocaEstudo.exe
+
+ 4. Na primeira vez, o Windows pode mostrar a tela azul
+    "O Windows protegeu o computador". Isso acontece com todo
+    programa novo que ainda não é conhecido pela Microsoft.
+    Clique em "Mais informações" e depois em
+    "Executar assim mesmo".
+
+  ATALHO (opcional): botão direito em FocaEstudo.exe >
+  Mostrar mais opções > Enviar para > Área de trabalho
+  (criar atalho).
+
+  IMPORTANTE:
+  • Extraia antes de abrir. Se abrir direto de dentro do .zip,
+    seus dados NÃO são salvos.
+  • Não coloque a pasta em "C:\Arquivos de Programas": o
+    Windows bloqueia a gravação dos dados ali.
+  • Não separe o FocaEstudo.exe das pastas "app" e "runtime".
+    Elas precisam ficar juntas.
+
+
+--------------------------------------------------------------
+ PRIMEIRO USO
+--------------------------------------------------------------
+
+  1. Na tela "Bem-vindo ao FocaEstudo", troque o texto de
+     exemplo pelas SUAS matérias, separadas por vírgula.
+     Ex.:  Anatomia, Bioquímica, Inglês
+  2. Escolha a matéria que vai estudar.
+  3. Registre o tempo pela aba Cronômetro, Manual ou Pomodoro.
+  4. Tudo é salvo automaticamente.
+
+
+--------------------------------------------------------------
+ MEUS DADOS E BACKUP
+--------------------------------------------------------------
+
+  Os dados ficam nesta mesma pasta (study_*.properties e
+  cópias .bak), criados no primeiro uso. Não os apague.
+
+  Backup ou levar para outro PC:
+      Ajustes > Backup > "Exportar dados..." / "Importar dados..."
+
+  Recebeu uma versão nova? Antes de apagar a pasta antiga,
+  copie os arquivos study_*.properties dela para a pasta nova
+  (ou use Exportar/Importar).
+
+
+--------------------------------------------------------------
+ PROBLEMAS COMUNS
+--------------------------------------------------------------
+
+  • Cliquei e nada abriu: talvez ele já esteja aberto (só
+    abre uma janela por vez). Olhe a barra de tarefas.
+  • O antivírus bloqueou: é falso alarme comum com programas
+    novos. Permita o FocaEstudo.exe no antivírus.
+  • Meus dados sumiram: confira se está abrindo pela MESMA
+    pasta de antes. Cada cópia tem seus próprios dados.
+
+  Para desinstalar, basta apagar a pasta (faça backup antes).
+
+  Dúvidas, bugs ou sugestões? Fale com o Erick!
+==============================================================

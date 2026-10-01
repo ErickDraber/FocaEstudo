@@ -7,3 +7,6 @@
 /study_sessions.properties
 /study_checklist.properties
 /src/study_*.properties
+
+# Saída do empacotamento (empacotamento/empacotar.ps1)
+/dist/

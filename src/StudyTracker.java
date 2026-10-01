@@ -22,6 +22,12 @@ public class StudyTracker extends JFrame {
 
     /** Descobre a raiz do projeto a partir da localização das classes (…/bin ⇒ raiz). */
     private static File resolveBaseDir() {
+        // Empacotado pelo jpackage (FocaEstudo.exe): dados ao lado do .exe, não em …/app
+        String exe = System.getProperty("jpackage.app-path");
+        if (exe != null) {
+            File dir = new File(exe).getParentFile();
+            if (dir != null && dir.isDirectory()) return dir;
+        }
         try {
             File loc = new File(StudyTracker.class.getProtectionDomain()
                     .getCodeSource().getLocation().toURI());
