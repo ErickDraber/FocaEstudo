@@ -2,6 +2,15 @@ import java.awt.*;
 
 public class AppTheme {
 
+    /**
+     * Neutraliza texto que o Swing interpretaria como HTML (JLabel, combo, tooltip e
+     * JOptionPane renderizam tudo que começa com "<html>", inclusive <img src="http://…">,
+     * o que faria um backup malicioso disparar acessos à internet). Troca o "<" por "‹".
+     */
+    public static String semHtml(String s) {
+        return s == null ? null : s.replaceAll("(?i)<(\\s*/?\\s*html)", "‹$1");
+    }
+
     // --- Tema ativo ---
     public static boolean dark = false;
 

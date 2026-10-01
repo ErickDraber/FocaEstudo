@@ -6,8 +6,8 @@ public class ChecklistItem {
     public boolean done;
 
     public ChecklistItem(String subject, String text, int estMin, boolean done) {
-        this.subject = subject;
-        this.text = text;
+        this.subject = AppTheme.semHtml(subject);
+        this.text = AppTheme.semHtml(text);
         this.estMin = estMin;
         this.done = done;
     }

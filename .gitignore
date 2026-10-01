@@ -10,3 +10,9 @@
 
 # Saída do empacotamento (empacotamento/empacotar.ps1)
 /dist/
+
+# Trava de instância única (criada pelo app ao abrir)
+/focaestudo.lock
+
+# Compilados (gerados pelo Executar_Programa.bat)
+/bin/

@@ -15,6 +15,9 @@ function Executar($exe, [string[]]$argumentos) {
 if (Test-Path $build) { Remove-Item $build -Recurse -Force }
 New-Item -ItemType Directory -Force "$build\classes", "$build\input" | Out-Null
 
+Write-Host "JDK usado (o runtime embutido herda as correções de segurança dele):"
+& java -version
+
 Write-Host "Compilando..."
 $fontes = Get-ChildItem "$raiz\src\*.java" | ForEach-Object { $_.FullName }
 Executar javac (@("-encoding", "UTF-8", "--release", "17", "-Xlint:none", "-d", "$build\classes") + $fontes)
@@ -42,4 +45,9 @@ if (Test-Path $saida) { Remove-Item $saida -Force }
 Executar "$env:SystemRoot\System32\tar.exe" @("-a", "-c", "-f", $saida, "-C", "$build\out", "FocaEstudo")
 
 Remove-Item $build -Recurse -Force
+
+# SHA-256 para publicar nas notas da release: quem baixa confere que o zip não foi trocado/corrompido
+$hash = (Get-FileHash $saida -Algorithm SHA256).Hash
+Set-Content "$saida.sha256" "$hash  FocaEstudo-Windows.zip" -Encoding ascii
 Write-Host "Pronto: $saida ($([math]::Round((Get-Item $saida).Length / 1MB, 1)) MB)"
+Write-Host "SHA-256: $hash  (cole nas notas da release)"

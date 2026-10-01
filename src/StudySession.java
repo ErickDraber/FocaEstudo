@@ -23,12 +23,12 @@ public class StudySession implements Serializable {
 
     public StudySession(String subject, int minutes, long timestamp, String type,
                         String note, String kind, int energy) {
-        this.subject = subject;
+        this.subject = AppTheme.semHtml(subject);
         this.minutes = minutes;
         this.timestamp = timestamp;
-        this.type = type;
-        this.note = note == null ? "" : note;
-        this.kind = kind == null ? "" : kind;
+        this.type = AppTheme.semHtml(type);
+        this.note = note == null ? "" : AppTheme.semHtml(note);
+        this.kind = kind == null ? "" : AppTheme.semHtml(kind);
         this.energy = energy < 0 ? 0 : (energy > 3 ? 3 : energy);
     }
 

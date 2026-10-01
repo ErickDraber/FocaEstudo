@@ -31,6 +31,18 @@ Funciona no Windows 10 e 11 (64 bits).
   Mostrar mais opções > Enviar para > Área de trabalho
   (criar atalho).
 
+  SEGURANÇA:
+  • Baixe SOMENTE pelo GitHub oficial:
+      https://github.com/ErickDraber/FocaEstudo/releases
+    Não use cópias reenviadas por terceiros.
+  • (Opcional) Para conferir se o arquivo é o original, abra o
+    PowerShell na pasta do download e rode:
+      Get-FileHash FocaEstudo-Windows.zip
+    O resultado deve ser igual ao SHA-256 da página da release.
+  • O FocaEstudo não usa internet, não pede senha e não precisa
+    de administrador. Se algo pedir isso, não é o original.
+  • Só importe backups (Ajustes > Backup) feitos por você.
+
   IMPORTANTE:
   • Extraia antes de abrir. Se abrir direto de dentro do .zip,
     seus dados NÃO são salvos.

@@ -4,7 +4,6 @@ import javax.swing.border.*;
 import java.awt.*;
 import java.awt.event.*;
 import java.io.*;
-import java.net.*;
 import java.text.SimpleDateFormat;
 import java.time.*;
 import java.util.*;
@@ -2376,7 +2375,7 @@ public class StudyTracker extends JFrame {
         int r = JOptionPane.showConfirmDialog(this, panel, "Nova área",
                 JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
         if (r != JOptionPane.OK_OPTION) return;
-        String name = fName.getText().trim();
+        String name = AppTheme.semHtml(fName.getText().trim());
         if (name.isEmpty()) return;
         String type = TYPE_KEYS[Math.max(0, cbType.getSelectedIndex())];
 
@@ -2416,7 +2415,7 @@ public class StudyTracker extends JFrame {
         String novoTipo = TYPE_KEYS[Math.max(0, cbType.getSelectedIndex())];
         if ("estudo".equals(novoTipo)) areaType.remove(old); else areaType.put(old, novoTipo);
 
-        String nw = fName.getText().trim();
+        String nw = AppTheme.semHtml(fName.getText().trim());
         if (nw.isEmpty() || nw.equals(old)) { refreshCombo(); subjectComboBox.setSelectedItem(old); updateUI(); return; }
         if (studyDataMap.containsKey(nw)) { toast("Esse nome já existe!"); return; }
         StudyData d = studyDataMap.remove(old);
@@ -2496,6 +2495,7 @@ public class StudyTracker extends JFrame {
     private static final String EXPORT_SEP_DATA     = "===== FOCAESTUDO DADOS =====";
     private static final String EXPORT_SEP_SESSIONS  = "===== FOCAESTUDO SESSOES =====";
     private static final String EXPORT_SEP_TAREFAS   = "===== FOCAESTUDO TAREFAS =====";
+    private static final long   MAX_IMPORT_BYTES     = 20L * 1024 * 1024;   // backups reais têm poucos KB
 
     private void exportData() {
         saveData(); saveSessions(); saveChecklist();   // garante que o disco está atualizado
@@ -2522,6 +2522,10 @@ public class StudyTracker extends JFrame {
     private void importData() {
         JFileChooser fc = new JFileChooser(BASE_DIR);
         if (fc.showOpenDialog(this) != JFileChooser.APPROVE_OPTION) return;
+        if (fc.getSelectedFile().length() > MAX_IMPORT_BYTES) {
+            JOptionPane.showMessageDialog(this, "Arquivo grande demais para ser um backup do FocaEstudo.");
+            return;
+        }
         try {
             String all = new String(java.nio.file.Files.readAllBytes(fc.getSelectedFile().toPath()),
                     java.nio.charset.StandardCharsets.UTF_8);
@@ -2857,7 +2861,7 @@ public class StudyTracker extends JFrame {
         java.util.List<String> nova = new ArrayList<>();
         java.util.Set<String> vistos = new java.util.HashSet<>();
         for (String line : ta.getText().split("\n")) {
-            String v = line.replace('|', '/').trim();
+            String v = AppTheme.semHtml(line.replace('|', '/').trim());
             if (!v.isEmpty() && vistos.add(v.toLowerCase())) nova.add(v);
         }
         if (nova.isEmpty()) subFocos.remove(area); else subFocos.put(area, nova);
@@ -2941,6 +2945,16 @@ public class StudyTracker extends JFrame {
         }
     }
 
+    /** Lê Properties já neutralizando HTML em chaves e valores (ver AppTheme.semHtml). */
+    private static Properties loadSemHtml(InputStream in) throws IOException {
+        Properties raw = new Properties();
+        raw.load(in);
+        Properties p = new Properties();
+        for (String k : raw.stringPropertyNames())
+            p.setProperty(AppTheme.semHtml(k), AppTheme.semHtml(raw.getProperty(k)));
+        return p;
+    }
+
     /** Copia arquivo para <nome>.bak antes de sobrescrever. */
     private static void backup(File f) {
         if (!f.isFile()) return;
@@ -2953,10 +2967,9 @@ public class StudyTracker extends JFrame {
     }
 
     private void loadData() {
-        Properties p = new Properties();
         if (!SAVE_FILE.exists()) return;   // primeiro uso de verdade
         try (FileInputStream in = new FileInputStream(SAVE_FILE)) {
-            p.load(in);
+            Properties p = loadSemHtml(in);
             for (String k : p.stringPropertyNames()) {
                 if (k.equals("__theme__")) {
                     if ("dark".equals(p.getProperty(k))) AppTheme.applyDark();
@@ -3312,28 +3325,32 @@ public class StudyTracker extends JFrame {
         if (input == null || input.trim().isEmpty()) { System.exit(0); return; }
         int idx = 0;
         for (String s : input.split(",")) {
-            String t = s.trim();
+            String t = AppTheme.semHtml(s.trim());
             if (!t.isEmpty() && !studyDataMap.containsKey(t))
                 studyDataMap.put(t, new StudyData(0, AppTheme.nextColor(idx++)));
         }
         if (studyDataMap.isEmpty()) { System.exit(0); }
     }
 
-    // Mantido vivo pela duração do processo: fechar o socket = liberar a instância.
+    // Mantido vivo pela duração do processo: o SO libera o lock quando o processo termina.
     @SuppressWarnings("unused")
-    private static ServerSocket instanceSocket;
-    private static final int INSTANCE_PORT = 52147;
+    private static java.nio.channels.FileLock instanceLock;
+    private static final File LOCK_FILE = new File(BASE_DIR, "focaestudo.lock");
 
-    /** Garante uma única instância: duas cópias gravando o mesmo save corrompem os dados. */
+    /**
+     * Garante uma única instância: duas cópias gravando o mesmo save corrompem os dados.
+     * Usa lock de arquivo na pasta dos dados (antes era uma porta TCP local, que abria
+     * um ponto de escuta desnecessário e podia ser ocupada por outro programa).
+     */
     private static boolean acquireSingleInstanceLock() {
         try {
-            ServerSocket s = new ServerSocket();
-            s.setReuseAddress(false);
-            s.bind(new InetSocketAddress(InetAddress.getLoopbackAddress(), INSTANCE_PORT));
-            instanceSocket = s;
-            return true;
+            java.nio.channels.FileChannel ch = new RandomAccessFile(LOCK_FILE, "rw").getChannel();
+            instanceLock = ch.tryLock();
+            return instanceLock != null;   // null ⇒ outra instância segura o lock
+        } catch (java.nio.channels.OverlappingFileLockException e) {
+            return false;
         } catch (IOException e) {
-            return false;   // porta já em uso ⇒ outra instância aberta
+            return true;    // pasta sem permissão de escrita: não dá para checar, segue
         }
     }
 
