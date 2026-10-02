@@ -24,12 +24,18 @@ Estudo, Físico, Lazer e Trabalho entram no mesmo lugar. Descanso e corpo contam
 - **Java 11+** de linguagem-alvo (a máquina tem 25). Evitar APIs > 11 onde der.
 - **Gravação atômica** (`storeAtomic`: `.tmp` + `fsync` + rename) + `.bak` antes de cada save.
   Queda de luz no meio da gravação não corrompe. `*.bak`/`*.tmp` no `.gitignore`.
-- **Arquivos de dados na raiz** (`BASE_DIR` via localização das classes), não no diretório de origem.
-  `study_data.properties`, `study_sessions.properties`, `study_checklist.properties` — **gitignored**,
-  o app cria/atualiza. **Não versionar dados pessoais. Não "restaurar" o que o usuário alterou.**
+- **Dados em `%APPDATA%\FocaEstudo`** (`DATA_DIR`; desde a 1.1.0), não na pasta do programa.
+  `study_data.properties`, `study_sessions.properties`, `study_checklist.properties`. Versões ≤ 1.0.2
+  gravavam ao lado do programa (`BASE_DIR`); `migrateLegacyData()` copia de lá uma vez, sem sobrescrever.
+  Testes: `-Dfocaestudo.dados=<pasta>`. **Não versionar dados pessoais. Não "restaurar" o que o usuário alterou.**
 - `.properties` é lido como ISO-8859-1 → acentos em chaves como `\uXXXX` (ex.: `Estatística`).
-- **Instância única** (socket `127.0.0.1:52147`). `javaw` aparece como 2 processos no Windows
-  (encaminhador do `javapath` + JVM real) — é normal, é uma instância só.
+- **Instância única** por trava de arquivo (`focaestudo.lock` na pasta dos dados; sem porta de rede).
+  `javaw` aparece como 2 processos no Windows (encaminhador do `javapath` + JVM real) — é normal.
+- **Rede:** só o aviso de versão nova (HEAD em `/releases/latest` do GitHub, 1×/dia, desligável). Nada
+  de dados do usuário sai do PC.
+- **Texto vindo de dados passa por `AppTheme.semHtml`** (Swing interpreta `<html>` em rótulos).
+- **Glifos:** ▶ ✓ e emojis aparecem como quadrado na fonte do Swing no Windows. Em texto novo, usar
+  palavras ou ícones desenhados (`PlannerPanel.dot`).
 - **L&F Nimbus** (`AppTheme.installLookAndFeel`), paleta dark/light em `applyLafPalette()`;
   toggle de tema chama `updateComponentTreeUI`. Cores só via tokens do `AppTheme`.
 - `updateUI()` chama `saveData()`; só grava depois de `ready == true` (fim de `initializeUI`).
@@ -50,4 +56,4 @@ Estudo, Físico, Lazer e Trabalho entram no mesmo lugar. Descanso e corpo contam
   `ChecklistItem`, `CalendarPanel`, `PieChartPanel`, `HistoryPanel`, `StatsPanel`, `ChecklistPanel`,
   `CustomTabs`, `RoundedPanel`, `StyledButton`.
 - Planos: `docs/PLANO.md` (features 1–6), `docs/PLANO_VISUAL.md` (V1–V5), `docs/PLANO_TDAH.md` (áreas/TDAH).
-- Andamento e retomada: `docs/PROGRESSO.md`.
+- Andamento e retomada: `docs/PROGRESSO.md`. Publicar versão: `docs/COMO_PUBLICAR.md`.

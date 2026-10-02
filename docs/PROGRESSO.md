@@ -3,7 +3,10 @@
 > Arquivo de retomada. Se o PC desligar / cair luz ou internet, comece a ler por aqui.
 > Plano completo das etapas: **`docs/PLANO.md`**.
 
-**Última atualização:** 2026-09-10 — **6 etapas de features + 5 etapas visuais (V1–V5) concluídas.**
+**Última atualização:** 2026-10-02 — v1.1.0 publicada; semana revista (cartão "Hoje"). Ver o log no fim.
+Visão geral de tudo, desde a criação: `docs/HISTORICO.md`.
+
+**Até 2026-09-10:** 6 etapas de features + 5 etapas visuais (V1–V5) concluídas.
 App compila (36 classes, L&F Nimbus) e roda; fechar/reabrir mantém os dados; nenhum `.tmp` órfão.
 Dados do usuário restaurados ao estado original + chaves de ajuste com valores padrão.
 
@@ -235,3 +238,8 @@ adiciona item e grava `study_checklist.properties`; dropdown Tipo presente.
 | 2026-09-10 | A6 | **Planejador semanal** (`PlannerPanel`, botão "Semana" no topo): grade 7 dias × Manhã/Tarde/Noite, clique na célula → escolhe a área (cor da área), "Limpar" por célula. "Preencher pelos dias da meta" distribui cada área nos seus `goalDays`, no 1º slot livre do dia. "Limpar tudo". Persistência `plan_<dia 1-7>_<slot m|t|n>` em `study_data.properties`; cobre rename/delete/import/reload. Hoje (Qui) marcado com "•". Commit a seguir. Verificado ao vivo: janela abre, grade renderiza, autofill preencheu Ter/Qua/Qui/Sex conforme `goaldays_*`, "Limpar tudo" apagou as chaves `plan_`. **Etapa A6 concluída — fim do plano TDAH.** |
 | 2026-09-10 | A6+ | **Metas separadas por tipo de área** (feedback do usuário). Cartão "Metas": cabeçalho por grupo (bolinha da cor do tipo + ESTUDO/FÍSICO/…), áreas do grupo abaixo, e os sub-focos de cada área numa linha recuada. Diálogo "Gerenciar metas": checkboxes agrupados por tipo com cabeçalho. Combo "Matéria:" reordenado por tipo (Estudo → Físico → Lazer → Trabalho → Outro), mantendo a ordem do usuário dentro do grupo. Commit a seguir. Verificado ao vivo: cartão e combo agrupados corretamente (CLP/Leitura/PBD/AOC2 em ESTUDO, Academia em FÍSICO). |
 | 2026-09-10 | viz | **Donut por área + sub-área**: `PieChartPanel` virou dois anéis — interno = áreas (Estudo/Físico/…) na cor do tipo, externo = matérias dentro de cada área. Legenda agrupada (cabeçalho da área + matérias). `PieChartPanel.Group`/`Slice`; `StudyTracker.buildPieGroups()`. **Barras de progresso na cor da meta**: novo `GaugeBar` (pintado à mão, o Nimbus ignorava as cores do `JProgressBar`) — trilho = tinta clara do mesmo matiz, preenchido = gradiente do tom escuro ao claro ("níveis da mesma cor" p/ mostrar o quanto falta). Usado no cartão Progresso e na barra de meta do topo. `AppTheme.shade()`/`mix()`. Verificado: compila; smoke test headless de `paint()` OK (1/2 grupos, vazio; frações 0/2%/40%/99%/100%/150%/NaN). Visual ao vivo não conferido (usuário voltou à máquina). |
+| 2026-10-01 | dist | Empacotamento Windows: `empacotamento/empacotar.ps1` (jpackage, `.exe` + Java embutido, zip + SHA-256), `LEIA-ME.txt`, ícone (`MakeIco.java`). Release v1.0.0/v1.0.1 no GitHub (`cb7ff4b`). |
+| 2026-10-01 | seg | `AppTheme.semHtml` em tudo que vem de dados (Swing renderiza `<html>`), trava de instância por arquivo em vez de porta TCP, hash nas notas da release (`b3b006a`). |
+| 2026-10-02 | 1.0.2 | Importar backup reconstrói a tela inteira (`rebuildUI`): tema do backup aplicado por completo, ajustes voltam ao padrão antes de carregar (`ace66ee`). `docs/COMO_PUBLICAR.md`. |
+| 2026-10-02 | 1.1.0 | Dados em `%APPDATA%\FocaEstudo` + migração por cópia; aviso de versão nova (GitHub, 1×/dia, desligável); "Abrir pasta dos dados" (`4087e32`). |
+| 2026-10-02 | semana | Combo "Matéria" mantém a seleção após `rebuildUI` (importar/tema). **Semana revista p/ TDAH**: cartão "Hoje" na tela principal (botão "Semana" saiu do topo), várias áreas por turno, autofill corrigido (todos os dias da meta, sem duplicar, sem sobrescrever, turno habitual, Completar/Refazer), "Agora" segue o plano do turno. Verificado: teste por reflexão com cópia dos dados reais (20 blocos, 1× por dia por área, 2º clique = 0, grava/relê igual); tela conferida ao vivo (card, grade, menu do turno, atualização do card). |

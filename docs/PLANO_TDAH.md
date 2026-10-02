@@ -55,6 +55,16 @@ clique na célula escolhe a área (nas cores da área), "Preencher pelos dias da
 usa os `goalDays`, "Limpar tudo". Persiste em `plan_<dia>_<slot>`. A contagem
 regressiva de prova com "plano X/Y" (itens do checklist) já entrou na A6-parcial.
 
+**Revisão (out/2026):** a grade numa janela escondida no topo não ajudava (fora da vista = esquecida),
+e o autofill tinha bugs (só 1 área por turno, ignorava metas de todos os dias, duplicava a cada clique,
+sobrescrevia a Tarde). Agora:
+- Cartão **"Hoje"** no topo da tela principal: os 3 turnos do dia, turno atual destacado, "Começar"
+  num clique, "· feito" quando bate o mínimo. A grade da semana abre por "editar semana".
+- Vários turnos por área e várias áreas por turno (`plan_1_m=PBD|FIA`; formato antigo continua válido).
+- "Preencher pelas metas": toda área com meta diária em todos os dias da meta, 1× por dia, no turno que
+  ela já costuma ocupar (rotina); pergunta "Completar" ou "Refazer do zero" se a semana já tem algo.
+- O cartão **"Agora"** segue primeiro o plano do turno atual.
+
 ---
 
 ## Resumo

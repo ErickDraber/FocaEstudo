@@ -190,8 +190,9 @@ public class StudyTracker extends JFrame {
     // Dias marcados como "difícil" (ISO date): não cobram, não quebram a sequência.
     private final java.util.Set<String> hardDays = new java.util.LinkedHashSet<>();
 
-    // Planejador semanal: chave "<dia 1-7>_<slot m|t|n>" -> nome da área. Ausente = vazio.
-    private final Map<String, String> weekPlan = new LinkedHashMap<>();
+    // Semana planejada: chave "<dia 1-7>_<turno m|t|n>" -> áreas daquele turno. Ausente = vazio.
+    // Gravado como plan_1_m=PBD|FIA (versões até 1.1.0 aceitavam só uma área por turno).
+    private final Map<String, java.util.List<String>> weekPlan = new LinkedHashMap<>();
 
     // Dias da semana em que a meta diária vale (ISO: 1=seg … 7=dom). Ausente = todos os dias.
     private final Map<String, java.util.Set<java.time.DayOfWeek>> goalDays = new LinkedHashMap<>();
@@ -334,9 +335,6 @@ public class StudyTracker extends JFrame {
             saveChecklist(); refreshProgressCard();
         }).setVisible(true));
 
-        StyledButton btnPlanner = new StyledButton("Semana", StyledButton.Variant.TEXT);
-        btnPlanner.addActionListener(e -> openPlanner());
-
         StyledButton btnSettings = new StyledButton("Ajustes", StyledButton.Variant.TEXT);
         btnSettings.addActionListener(e -> showSettingsDialog());
 
@@ -346,7 +344,6 @@ public class StudyTracker extends JFrame {
         right.add(btnHistory);
         right.add(btnStats);
         right.add(btnTasks);
-        right.add(btnPlanner);
         right.add(btnSettings);
         right.add(btnTheme);
 
@@ -373,10 +370,14 @@ public class StudyTracker extends JFrame {
         JPanel leftBottom = new JPanel();
         leftBottom.setLayout(new BoxLayout(leftBottom, BoxLayout.Y_AXIS));
         leftBottom.setOpaque(false);
+        // "Hoje" no topo: o plano do dia fica à vista em vez de escondido numa janela.
+        JComponent tc = buildTodayCard();    tc.setAlignmentX(Component.LEFT_ALIGNMENT);
         JComponent nc = buildNowCard();      nc.setAlignmentX(Component.LEFT_ALIGNMENT);
         JComponent bc = buildBalanceCard();  bc.setAlignmentX(Component.LEFT_ALIGNMENT);
         JComponent gc = buildGoalsCard();    gc.setAlignmentX(Component.LEFT_ALIGNMENT);
         JComponent pc = buildProgressCard(); pc.setAlignmentX(Component.LEFT_ALIGNMENT);
+        leftBottom.add(tc);
+        leftBottom.add(Box.createVerticalStrut(12));
         leftBottom.add(nc);
         leftBottom.add(Box.createVerticalStrut(12));
         leftBottom.add(bc);
@@ -630,12 +631,7 @@ public class StudyTracker extends JFrame {
             go.setFont(AppTheme.FONT_SMALL);
             final String area = sug[0];
             final String sf = sug.length > 2 ? sug[2] : null;
-            go.addActionListener(e -> {
-                subjectComboBox.setSelectedItem(area);        // dispara refreshKindCombo
-                if (sf != null && kindCombo != null) kindCombo.setSelectedItem(sf);
-                if (bottomTabs != null) bottomTabs.select(0);   // aba Cronômetro
-                startStopwatch();
-            });
+            go.addActionListener(e -> startArea(area, sf));
             nowBody.add(txt, BorderLayout.CENTER);
             nowBody.add(go,  BorderLayout.EAST);
         }
@@ -643,9 +639,22 @@ public class StudyTracker extends JFrame {
         nowBody.repaint();
     }
 
+    /** Seleciona a área (e o sub-foco), vai para a aba Cronômetro e liga o cronômetro: 1 clique. */
+    private void startArea(String area, String subFoco) {
+        subjectComboBox.setSelectedItem(area);        // dispara refreshKindCombo
+        if (subFoco != null && kindCombo != null) kindCombo.setSelectedItem(subFoco);
+        if (bottomTabs != null) bottomTabs.select(0);   // aba Cronômetro
+        startStopwatch();
+    }
+
     /** {área, motivo} da coisa mais relevante pra fazer agora, ou null. */
     private String[] nextSuggestion() {
         LocalDate today = LocalDate.now();
+        // 0. o que a pessoa já planejou para este turno: a decisão já foi tomada, é só seguir
+        int turno = PlannerPanel.slotAt(LocalTime.now());
+        for (String a : plannedAreas(today.getDayOfWeek().getValue(), turno))
+            if (!isDoneToday(a)) return new String[]{a, "está no seu plano " + PlannerPanel.SLOT_PHRASE[turno]};
+
         // 1. meta diária de hoje não batida (prioriza prova mais próxima e o que falta)
         String best = null; long bestScore = Long.MIN_VALUE; String reason = null;
         for (String s : studyDataMap.keySet()) {
@@ -1037,43 +1046,255 @@ public class StudyTracker extends JFrame {
         toast(n == 1 ? "Metas de 1 matéria limpas." : "Metas de " + n + " matérias limpas.");
     }
 
-    // ── Planejador semanal (A6) ─────────────────────────────────────────────
+    // ── Semana planejada + cartão "Hoje" ─────────────────────────────────────
+    // O plano do dia fica na tela principal (externalizar o "o que vem agora"); a grade da
+    // semana inteira é só para editar, aberta pelo "editar semana" do cartão.
 
     private PlannerPanel plannerWindow;
+    private JPanel  todayBody;
+    private JLabel  todayTitle;
+    private String  todayShownKey;   // "<data>_<turno>" desenhado: o timer só redesenha quando muda
+    private Timer   todayTimer;
 
     private void openPlanner() {
+        // Sempre recria: a janela guarda a lista e as cores das áreas de quando foi aberta.
+        if (plannerWindow != null) plannerWindow.dispose();
         List<String> areas = new ArrayList<>();
         for (String s : studyDataMap.keySet()) if (!archived.contains(s)) areas.add(s);
         Map<String, Color> colorMap = new LinkedHashMap<>();
         studyDataMap.forEach((k, v) -> colorMap.put(k, v.getColor()));
-
-        if (plannerWindow != null && plannerWindow.isDisplayable()) {
-            plannerWindow.toFront();
-            plannerWindow.rebuild();
-            return;
-        }
         plannerWindow = new PlannerPanel(this, areas, colorMap, weekPlan,
-                this::saveData, this::autofillWeekPlan);
+                this::onPlanChanged, this::fillPlanFromGoals);
         plannerWindow.setVisible(true);
     }
 
-    /** Preenche o planejador a partir dos dias de meta de cada área, no 1º slot livre do dia. */
-    private void autofillWeekPlan() {
-        String[] slots = {"m", "t", "n"};
-        for (String s : studyDataMap.keySet()) {
-            if (archived.contains(s)) continue;
-            java.util.Set<java.time.DayOfWeek> dias = goalDays.get(s);
-            if (dias == null || dias.isEmpty()) continue;
-            for (java.time.DayOfWeek dw : dias) {
-                int d = dw.getValue();
-                boolean colocou = false;
-                for (String sl : slots) {
-                    if (!weekPlan.containsKey(d + "_" + sl)) { weekPlan.put(d + "_" + sl, s); colocou = true; break; }
-                }
-                if (!colocou) weekPlan.put(d + "_t", s);
+    private void onPlanChanged() {
+        saveData();
+        refreshTodayCard();
+        refreshNowCard();
+    }
+
+    /** Áreas planejadas para o dia (1 = seg) e turno (0..2), sem as apagadas/arquivadas. */
+    private java.util.List<String> plannedAreas(int dow, int turno) {
+        java.util.List<String> out = new ArrayList<>();
+        for (String a : weekPlan.getOrDefault(dow + "_" + PlannerPanel.SLOT[turno], java.util.Collections.emptyList()))
+            if (studyDataMap.containsKey(a) && !archived.contains(a)) out.add(a);
+        return out;
+    }
+
+    /** Meta diária que conta como "feito": o mínimo, se houver; senão o ideal. 0 = sem meta. */
+    private int dailyDoneGoal(String area) {
+        int min = goalsMin.getOrDefault(area, 0);
+        return min > 0 ? min : goals.getOrDefault(area, 0);
+    }
+
+    /** Feito hoje = bateu o mínimo do dia; sem meta, basta ter mexido nisso hoje. */
+    private boolean isDoneToday(String area) {
+        int feito = minutesOnDay(area, LocalDate.now()), meta = dailyDoneGoal(area);
+        return meta > 0 ? feito >= meta : feito > 0;
+    }
+
+    /**
+     * Botão "Preencher pelas metas". Se a semana já tem algo, pergunta se completa
+     * (mantém tudo) ou recomeça do zero pelas metas (útil quando os dias da meta mudaram).
+     */
+    private void fillPlanFromGoals() {
+        Component parent = plannerWindow != null && plannerWindow.isVisible() ? plannerWindow : this;
+        if (!weekPlan.isEmpty()) {
+            Object[] opts = {"Completar", "Refazer do zero", "Cancelar"};
+            int r = JOptionPane.showOptionDialog(parent,
+                    "Sua semana já tem áreas.\n\n"
+                  + "Completar: mantém o que está lá e só adiciona o que falta pelas metas.\n"
+                  + "Refazer do zero: apaga a semana e monta de novo só pelas metas.",
+                    "Preencher pelas metas", JOptionPane.DEFAULT_OPTION, JOptionPane.QUESTION_MESSAGE,
+                    null, opts, opts[0]);
+            if (r == 1) weekPlan.clear();
+            else if (r != 0) return;
+        }
+        int n = autofillWeekPlan();
+        onPlanChanged();
+        toast(n == 0 ? "Tudo que tem meta diária já está na semana."
+                     : n == 1 ? "1 bloco colocado pelas metas." : n + " blocos colocados pelas metas.");
+    }
+
+    /**
+     * Coloca cada área com meta diária em todos os dias da meta (sem dias marcados = todos),
+     * uma vez por dia, sem apagar nada. Turno: o que a área já ocupa em outros dias (rotina
+     * previsível); se ainda não tem, o turno mais vazio daquele dia. Devolve quantos colocou.
+     */
+    private int autofillWeekPlan() {
+        // Ordem fixa (tipo, depois nome): o mapa de áreas vem do .properties em ordem aleatória.
+        java.util.List<String> ordem = new ArrayList<>();
+        for (String t : TYPE_KEYS) {
+            java.util.List<String> doTipo = new ArrayList<>();
+            for (String a : studyDataMap.keySet())
+                if (!archived.contains(a) && typeOf(a).equals(t)) doTipo.add(a);
+            java.util.Collections.sort(doTipo, String.CASE_INSENSITIVE_ORDER);
+            ordem.addAll(doTipo);
+        }
+        int colocados = 0;
+        for (String a : ordem) {
+            if (dailyDoneGoal(a) <= 0) continue;
+            java.util.Set<java.time.DayOfWeek> dias = goalDays.get(a);
+            for (int d = 1; d <= 7; d++) {
+                if (dias != null && !dias.isEmpty() && !dias.contains(java.time.DayOfWeek.of(d))) continue;
+                if (dayHasArea(d, a)) continue;
+                weekPlan.computeIfAbsent(d + "_" + PlannerPanel.SLOT[pickSlot(a, d)], k -> new ArrayList<>()).add(a);
+                colocados++;
             }
         }
-        saveData();
+        return colocados;
+    }
+
+    private boolean dayHasArea(int dow, String area) {
+        for (String sl : PlannerPanel.SLOT)
+            if (weekPlan.getOrDefault(dow + "_" + sl, java.util.Collections.emptyList()).contains(area)) return true;
+        return false;
+    }
+
+    private int pickSlot(String area, int dow) {
+        int[] habito = new int[3];
+        for (int d = 1; d <= 7; d++)
+            for (int s = 0; s < 3; s++)
+                if (weekPlan.getOrDefault(d + "_" + PlannerPanel.SLOT[s], java.util.Collections.emptyList()).contains(area))
+                    habito[s]++;
+        int best = -1;
+        for (int s = 0; s < 3; s++) if (habito[s] > 0 && (best < 0 || habito[s] > habito[best])) best = s;
+        if (best >= 0) return best;
+        int vazio = 0;
+        for (int s = 1; s < 3; s++)
+            if (weekPlan.getOrDefault(dow + "_" + PlannerPanel.SLOT[s], java.util.Collections.emptyList()).size()
+              < weekPlan.getOrDefault(dow + "_" + PlannerPanel.SLOT[vazio], java.util.Collections.emptyList()).size())
+                vazio = s;
+        return vazio;
+    }
+
+    private JComponent buildTodayCard() {
+        RoundedPanel card = new RoundedPanel(18, AppTheme.SURFACE);
+        card.setLayout(new BorderLayout(0, 8));
+        card.setBorder(new EmptyBorder(14, 16, 14, 16));
+        JPanel head = new JPanel(new BorderLayout());
+        head.setOpaque(false);
+        todayTitle = new JLabel("Hoje");
+        todayTitle.setFont(AppTheme.FONT_SECTION);
+        todayTitle.setForeground(AppTheme.TEXT_PRI);
+        StyledButton edit = new StyledButton("editar semana", StyledButton.Variant.TEXT);
+        edit.setFont(AppTheme.FONT_SMALL);
+        edit.addActionListener(e -> openPlanner());
+        head.add(todayTitle, BorderLayout.WEST);
+        head.add(edit, BorderLayout.EAST);
+        card.add(head, BorderLayout.NORTH);
+        todayBody = new JPanel();
+        todayBody.setLayout(new BoxLayout(todayBody, BoxLayout.Y_AXIS));
+        todayBody.setOpaque(false);
+        card.add(todayBody, BorderLayout.CENTER);
+        return card;
+    }
+
+    private void refreshTodayCard() {
+        if (todayBody == null) return;
+        todayBody.removeAll();
+        LocalDate hoje = LocalDate.now();
+        int dow = hoje.getDayOfWeek().getValue();
+        int agora = PlannerPanel.slotAt(LocalTime.now());
+        todayShownKey = hoje + "_" + agora;
+        todayTitle.setText("Hoje · " + PlannerPanel.DOW_LONG[dow - 1]);
+
+        boolean vazio = true;
+        for (int s = 0; s < 3; s++) if (!plannedAreas(dow, s).isEmpty()) vazio = false;
+        if (vazio) {
+            JPanel p = new JPanel(new BorderLayout(10, 0));
+            p.setOpaque(false);
+            p.setAlignmentX(Component.LEFT_ALIGNMENT);
+            JLabel l = new JLabel("Nada planejado para hoje.");
+            l.setFont(AppTheme.FONT_LABEL); l.setForeground(AppTheme.TEXT_SEC);
+            StyledButton fill = new StyledButton("Preencher pelas metas", StyledButton.Variant.TONAL);
+            fill.setFont(AppTheme.FONT_SMALL);
+            fill.addActionListener(e -> fillPlanFromGoals());
+            p.add(l, BorderLayout.CENTER);
+            p.add(fill, BorderLayout.EAST);
+            todayBody.add(p);
+        } else {
+            for (int s = 0; s < 3; s++) {
+                if (s > 0) todayBody.add(Box.createVerticalStrut(4));
+                todayBody.add(todaySlotRow(dow, s, agora));
+            }
+        }
+        todayBody.revalidate();
+        todayBody.repaint();
+    }
+
+    private JComponent todaySlotRow(int dow, int turno, int agora) {
+        boolean atual = turno == agora, passou = turno < agora;
+        java.util.List<String> areas = plannedAreas(dow, turno);
+
+        JPanel row = atual ? new RoundedPanel(10, AppTheme.SURFACE2, false) : new JPanel();
+        row.setLayout(new BorderLayout(8, 0));
+        row.setOpaque(false);
+        row.setBorder(new EmptyBorder(4, 8, 4, 8));
+        row.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+        JLabel nome = new JLabel(PlannerPanel.SLOT_LABEL[turno] + (atual ? " · agora" : ""));
+        nome.setFont(atual ? AppTheme.FONT_BOLD : AppTheme.FONT_SMALL);
+        nome.setForeground(atual ? AppTheme.ACCENT : passou ? AppTheme.TEXT_MUT : AppTheme.TEXT_SEC);
+        nome.setPreferredSize(new Dimension(96, 22));
+        row.add(nome, BorderLayout.WEST);
+
+        JPanel chips = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 2));
+        chips.setOpaque(false);
+        String proxima = null;
+        if (areas.isEmpty()) {
+            JLabel l = new JLabel("livre");
+            l.setFont(AppTheme.FONT_SMALL); l.setForeground(AppTheme.TEXT_MUT);
+            chips.add(l);
+        }
+        for (String a : areas) {
+            boolean feito = isDoneToday(a);
+            if (!feito && proxima == null) proxima = a;
+            chips.add(todayChip(a, feito, passou));
+        }
+        row.add(chips, BorderLayout.CENTER);
+
+        if (atual && proxima != null) {
+            StyledButton go = new StyledButton("Começar", StyledButton.Variant.FILLED);
+            go.setFont(AppTheme.FONT_SMALL);
+            go.setToolTipText("Começar " + proxima + " agora");
+            final String area = proxima;
+            go.addActionListener(e -> startArea(area, null));
+            row.add(go, BorderLayout.EAST);
+        }
+        return row;
+    }
+
+    /** Nome da área com a bolinha da cor ("· feito" se já bateu o mínimo). Clicar começa o cronômetro nela. */
+    private JComponent todayChip(String area, boolean feito, boolean passou) {
+        StudyData sd = studyDataMap.get(area);
+        JLabel l = new JLabel(area);
+        l.setFont(AppTheme.FONT_LABEL);
+        if (feito) {
+            l.setText(area + " · feito");   // sem ✓: a fonte do Swing no Windows mostra um quadrado
+            l.setForeground(AppTheme.SUCCESS);
+        } else {
+            l.setIcon(PlannerPanel.dot(sd != null ? sd.getColor() : AppTheme.ACCENT));
+            l.setIconTextGap(5);
+            l.setForeground(passou ? AppTheme.TEXT_SEC : AppTheme.TEXT_PRI);
+            l.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+            l.setToolTipText("Começar " + area + " agora");
+            l.addMouseListener(new MouseAdapter() {
+                @Override public void mouseClicked(MouseEvent e) { startArea(area, null); }
+            });
+        }
+        return l;
+    }
+
+    /** Troca de turno/dia com o app aberto: redesenha "Hoje" e "Agora" (checa a cada minuto). */
+    private void startTodayTimer() {
+        if (todayTimer != null) return;
+        todayTimer = new Timer(60_000, e -> {
+            String k = LocalDate.now() + "_" + PlannerPanel.slotAt(LocalTime.now());
+            if (!k.equals(todayShownKey)) { refreshTodayCard(); refreshNowCard(); }
+        });
+        todayTimer.start();
     }
 
     private JComponent buildProgressCard() {
@@ -2422,7 +2643,7 @@ public class StudyTracker extends JFrame {
         int r = JOptionPane.showConfirmDialog(this, panel, "Nova área",
                 JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
         if (r != JOptionPane.OK_OPTION) return;
-        String name = AppTheme.semHtml(fName.getText().trim());
+        String name = AppTheme.semHtml(fName.getText().replace('|', '/').trim());   // | separa áreas na semana
         if (name.isEmpty()) return;
         String type = TYPE_KEYS[Math.max(0, cbType.getSelectedIndex())];
 
@@ -2462,7 +2683,7 @@ public class StudyTracker extends JFrame {
         String novoTipo = TYPE_KEYS[Math.max(0, cbType.getSelectedIndex())];
         if ("estudo".equals(novoTipo)) areaType.remove(old); else areaType.put(old, novoTipo);
 
-        String nw = AppTheme.semHtml(fName.getText().trim());
+        String nw = AppTheme.semHtml(fName.getText().replace('|', '/').trim());
         if (nw.isEmpty() || nw.equals(old)) { refreshCombo(); subjectComboBox.setSelectedItem(old); updateUI(); return; }
         if (studyDataMap.containsKey(nw)) { toast("Esse nome já existe!"); return; }
         StudyData d = studyDataMap.remove(old);
@@ -2483,7 +2704,7 @@ public class StudyTracker extends JFrame {
         if (archived.remove(old))        { archived.add(nw); }
         if (areaType.containsKey(old))   { areaType.put(nw, areaType.remove(old)); }
         if (subFocos.containsKey(old))   { subFocos.put(nw, subFocos.remove(old)); }
-        weekPlan.replaceAll((k, v) -> old.equals(v) ? nw : v);
+        weekPlan.values().forEach(l -> l.replaceAll(a -> old.equals(a) ? nw : a));
         for (ChecklistItem it : checklist) if (it.subject.equals(old)) it.subject = nw;
         if (examDate.containsKey(old))   { examDate.put(nw, examDate.remove(old)); }
         refreshCombo(); subjectComboBox.setSelectedItem(nw); saveChecklist(); updateUI();
@@ -2524,7 +2745,7 @@ public class StudyTracker extends JFrame {
     private void deleteSubject() {
         String s = (String) subjectComboBox.getSelectedItem(); if (s == null) return;
         int r = JOptionPane.showConfirmDialog(this, "Deletar \"" + s + "\"? Todo o tempo será perdido.", "Deletar Matéria", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
-        if (r == JOptionPane.YES_OPTION) { studyDataMap.remove(s); goals.remove(s); goalsMin.remove(s); goalsWeek.remove(s); goalsMonth.remove(s); streakBest.remove(s); goalDays.remove(s); examDate.remove(s); archived.remove(s); areaType.remove(s); subFocos.remove(s); weekPlan.values().removeIf(s::equals); checklist.removeIf(it -> it.subject.equals(s)); saveChecklist(); refreshCombo(); updateUI(); }
+        if (r == JOptionPane.YES_OPTION) { studyDataMap.remove(s); goals.remove(s); goalsMin.remove(s); goalsWeek.remove(s); goalsMonth.remove(s); streakBest.remove(s); goalDays.remove(s); examDate.remove(s); archived.remove(s); areaType.remove(s); subFocos.remove(s); weekPlan.values().forEach(l -> l.remove(s)); weekPlan.values().removeIf(java.util.List::isEmpty); checklist.removeIf(it -> it.subject.equals(s)); saveChecklist(); refreshCombo(); updateUI(); }
     }
 
     // ── HISTÓRICO ───────────────────────────────────────────────────────────
@@ -2775,6 +2996,8 @@ public class StudyTracker extends JFrame {
         boolean cdRunning = countdownTimer != null && countdownTimer.isRunning();
         if (swRunning) stopwatch.stop();
         if (cdRunning) countdownTimer.stop();
+        // buildUI() cria um combo novo: sem isso a matéria volta para o primeiro item.
+        Object sel = subjectComboBox != null ? subjectComboBox.getSelectedItem() : null;
 
         SwingUtilities.updateComponentTreeUI(this);   // aplica a paleta nova do L&F
         getContentPane().removeAll();
@@ -2787,6 +3010,8 @@ public class StudyTracker extends JFrame {
         if (cdRunning) countdownTimer.start();
 
         refreshCombo();
+        if (sel != null && studyDataMap.containsKey(sel) && !archived.contains(sel))
+            subjectComboBox.setSelectedItem(sel);   // o listener do combo atualiza sub-foco e metas
         updateUI();
         revalidate();
         repaint();
@@ -2823,6 +3048,7 @@ public class StudyTracker extends JFrame {
         }
         updateGoalProgress();
         refreshStreaks();
+        refreshTodayCard();
         refreshNowCard();
         refreshBalanceCard();
         refreshGoalsCard();
@@ -2972,7 +3198,7 @@ public class StudyTracker extends JFrame {
         subFocos.forEach((k, list) -> { if (!list.isEmpty()) p.setProperty("subfocos_" + k, String.join(",", list)); });
         goalsMin.forEach((k, v) -> { if (v > 0) p.setProperty("goalmin_" + k, String.valueOf(v)); });
         if (!hardDays.isEmpty()) p.setProperty("__hard_days__", String.join(",", hardDays));
-        weekPlan.forEach((k, v) -> { if (v != null && !v.isEmpty()) p.setProperty("plan_" + k, v); });
+        weekPlan.forEach((k, l) -> { if (!l.isEmpty()) p.setProperty("plan_" + k, String.join("|", l)); });
         if (balanceNudgeWeek != null) p.setProperty("__balance_nudge_week__", balanceNudgeWeek);
         if (!archived.isEmpty()) p.setProperty("__archived__", String.join(",", archived));
         streakBest.forEach((k, v) -> p.setProperty("streakbest_" + k, String.valueOf(v)));
@@ -3137,8 +3363,10 @@ public class StudyTracker extends JFrame {
                     continue;
                 }
                 if (k.startsWith("plan_")) {
-                    String v = p.getProperty(k);
-                    if (v != null && !v.trim().isEmpty()) weekPlan.put(k.substring(5), v.trim());
+                    java.util.List<String> l = new ArrayList<>();
+                    for (String a : p.getProperty(k).split("\\|"))
+                        if (!a.trim().isEmpty() && !l.contains(a.trim())) l.add(a.trim());
+                    if (!l.isEmpty()) weekPlan.put(k.substring(5), l);
                     continue;
                 }
                 if (k.equals("__balance_nudge_week__")) { balanceNudgeWeek = p.getProperty(k); continue; }
@@ -3297,6 +3525,7 @@ public class StudyTracker extends JFrame {
                   + "Os arquivos antigos continuam na pasta do programa, sem uso.");
         SwingUtilities.invokeLater(this::maybeShowWeeklySummary);
         setupReminder();
+        startTodayTimer();
         maybeCheckForUpdate();
     }
 
