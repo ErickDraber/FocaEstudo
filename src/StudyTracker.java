@@ -2590,12 +2590,24 @@ public class StudyTracker extends JFrame {
         areaType.clear(); typeGoalWeek.clear(); subFocos.clear(); weekPlan.clear();
         streakBest.clear(); unknownProps.clear();
         streakBestGeneral = 0; celebratedStreakMilestone = 0;
-        loadData();
+        // Volta os ajustes ao padrão: um backup sem alguma chave não pode herdar o valor antigo.
+        setMinFocusMin = 1; setIdleMinutes = 10; setPomoAutoCycle = false;
+        setReminderHour = -1; setTransitionMin = 5; setHyperfocusH = 3;
+        weeklySummaryShownWeek = null; reminderShownDay = null; balanceNudgeWeek = null;
+        loadOk = true;
+        // O planejador aberto guarda a lista de áreas antiga.
+        if (plannerWindow != null) { plannerWindow.dispose(); plannerWindow = null; }
+
+        ready = false;            // não grava nada enquanto recarrega
+        loadData();               // pode trocar o tema (__theme__ do backup)
         loadSessions();
         loadChecklist();
-        refreshCombo();
         if (studyDataMap.isEmpty()) promptForSubjects();
-        updateUI();
+        // Reconstrói a tela inteira: se o tema do backup for outro, só atualizar
+        // os dados deixava a interface metade clara, metade escura.
+        rebuildUI();
+        ready = true;
+        saveData();
     }
 
     // ── AJUSTES ─────────────────────────────────────────────────────────────
