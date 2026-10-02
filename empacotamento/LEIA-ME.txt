@@ -39,15 +39,16 @@ Funciona no Windows 10 e 11 (64 bits).
     PowerShell na pasta do download e rode:
       Get-FileHash FocaEstudo-Windows.zip
     O resultado deve ser igual ao SHA-256 da página da release.
-  • O FocaEstudo não usa internet, não pede senha e não precisa
-    de administrador. Se algo pedir isso, não é o original.
+  • O FocaEstudo não pede senha e não precisa de administrador.
+    Se algo pedir isso, não é o original.
+  • A única conexão com a internet é uma consulta ao GitHub, no
+    máximo 1 vez por dia, para avisar se saiu uma versão nova.
+    Nenhum dado seu é enviado. Dá para desligar em Ajustes >
+    Atualizações.
   • Só importe backups (Ajustes > Backup) feitos por você.
 
   IMPORTANTE:
-  • Extraia antes de abrir. Se abrir direto de dentro do .zip,
-    seus dados NÃO são salvos.
-  • Não coloque a pasta em "C:\Arquivos de Programas": o
-    Windows bloqueia a gravação dos dados ali.
+  • Extraia antes de abrir. Não abra direto de dentro do .zip.
   • Não separe o FocaEstudo.exe das pastas "app" e "runtime".
     Elas precisam ficar juntas.
 
@@ -68,15 +69,31 @@ Funciona no Windows 10 e 11 (64 bits).
  MEUS DADOS E BACKUP
 --------------------------------------------------------------
 
-  Os dados ficam nesta mesma pasta (study_*.properties e
-  cópias .bak), criados no primeiro uso. Não os apague.
+  Os dados ficam guardados no seu usuário do Windows, FORA da
+  pasta do programa:
+      %APPDATA%\FocaEstudo
+  (Ajustes > Backup > "Abrir pasta dos dados" abre essa pasta.)
+  Cada usuário do Windows tem os próprios dados.
 
-  Backup ou levar para outro PC:
+  Backup ou levar para outro PC / outro usuário:
       Ajustes > Backup > "Exportar dados..." / "Importar dados..."
 
-  Recebeu uma versão nova? Antes de apagar a pasta antiga,
-  copie os arquivos study_*.properties dela para a pasta nova
-  (ou use Exportar/Importar).
+
+--------------------------------------------------------------
+ ATUALIZAR PARA UMA VERSÃO NOVA
+--------------------------------------------------------------
+
+  O FocaEstudo avisa quando sai uma versão nova. Para atualizar:
+  1. Feche o FocaEstudo.
+  2. Baixe o FocaEstudo-Windows.zip novo.
+  3. Extraia por cima da pasta atual (ou em qualquer outra).
+  Seus dados não estão na pasta do programa, então nada se perde.
+
+  Vindo da versão 1.0.2 ou anterior? Na primeira vez que abrir,
+  a versão nova copia sozinha os seus dados da pasta antiga para
+  %APPDATA%\FocaEstudo. Para isso, extraia por cima da pasta
+  antiga. Se extrair em outro lugar, exporte um backup na versão
+  antiga e importe na nova.
 
 
 --------------------------------------------------------------
@@ -87,10 +104,12 @@ Funciona no Windows 10 e 11 (64 bits).
     abre uma janela por vez). Olhe a barra de tarefas.
   • O antivírus bloqueou: é falso alarme comum com programas
     novos. Permita o FocaEstudo.exe no antivírus.
-  • Meus dados sumiram: confira se está abrindo pela MESMA
-    pasta de antes. Cada cópia tem seus próprios dados.
+  • Meus dados sumiram: confira se está no MESMO usuário do
+    Windows. Se veio da versão 1.0.2 ou anterior, veja a seção
+    "Atualizar para uma versão nova".
 
-  Para desinstalar, basta apagar a pasta (faça backup antes).
+  Para desinstalar, apague a pasta do programa. Para apagar
+  também os dados, apague %APPDATA%\FocaEstudo (faça backup antes).
 
   Dúvidas, bugs ou sugestões? Fale com o Erick!
 ==============================================================

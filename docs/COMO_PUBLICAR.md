@@ -16,7 +16,7 @@ Ninguém altera o `.exe` diretamente. As mudanças são feitas em `src\`, testad
 ## Passo a passo de cada mudança
 
 1. **Alterar** os arquivos em `src\`.
-2. **Testar** rodando `Executar_Programa.bat`. Use os seus dados de verdade só depois de fazer um backup em *Ajustes > Backup > Exportar dados...*.
+2. **Testar** rodando `Executar_Programa.bat`. Ele usa os seus dados de verdade (os mesmos do `.exe`), então faça antes um backup em *Ajustes > Backup > Exportar dados...*.
 3. **Commit e push** em `main`:
    ```powershell
    git add src\Arquivo.java
@@ -32,7 +32,7 @@ Ninguém altera o `.exe` diretamente. As mudanças são feitas em `src\`, testad
    powershell -ExecutionPolicy Bypass -File empacotamento\empacotar.ps1 -Versao X.Y.Z
    ```
    No final, o script mostra o SHA-256.
-6. **Testar o zip** antes de publicar: extraia `dist\FocaEstudo-Windows.zip` numa pasta nova e abra o `FocaEstudo.exe`.
+6. **Testar o zip** antes de publicar: extraia `dist\FocaEstudo-Windows.zip` numa pasta nova e abra o `FocaEstudo.exe`. Se não quiser usar os dados reais, abra pelo PowerShell com `$env:APPDATA="C:\pasta\de\teste"; .\FocaEstudo.exe`.
 7. **Publicar** (cole o SHA-256 nas notas):
    ```powershell
    & "C:\Program Files\GitHub CLI\gh.exe" release create vX.Y.Z dist\FocaEstudo-Windows.zip `
@@ -51,15 +51,12 @@ Sempre este, porque ele aponta para a versão mais recente:
 
 https://github.com/ErickDraber/FocaEstudo/releases/latest/download/FocaEstudo-Windows.zip
 
-Quem já tem o app **não recebe a atualização sozinho**: precisa baixar o zip de novo.
+A partir da 1.1.0, o app consulta o GitHub (no máximo 1× por dia) e avisa quando sai uma versão nova. Ele só **avisa**: a pessoa baixa o zip e extrai sozinha. O aviso compara o número da release mais recente com o `-Versao` usado no `empacotar.ps1`, então **a tag precisa ser `vX.Y.Z` e o `-Versao` precisa ser o mesmo `X.Y.Z`**. Pelo `.bat`, o aviso nunca aparece.
 
 ## Onde ficam os dados
 
-Os dados (`study_*.properties`) ficam **na mesma pasta do programa**:
+Desde a 1.1.0, os dados (`study_*.properties`) ficam em `%APPDATA%\FocaEstudo`, um por usuário do Windows. O `.bat` e o `.exe` usam a **mesma** pasta, e a trava `focaestudo.lock` impede que os dois fiquem abertos ao mesmo tempo.
 
-- no `.exe`, ao lado do `FocaEstudo.exe`;
-- no `.bat`, na raiz deste repositório.
-
-Por isso, o `.bat` e o `.exe` **não compartilham dados**, e cada usuário do Windows tem os dados da pasta que ele abre.
-
-Para atualizar sem perder nada: antes, exporte um backup (*Ajustes > Backup > Exportar dados...*). Depois, extraia a nova versão por cima da antiga **ou** extraia numa pasta nova e importe o backup.
+- **Migração:** na primeira abertura, se `%APPDATA%\FocaEstudo` ainda não tem dados, o app **copia** os `study_*.properties` da pasta do programa e deixa um `DADOS_MOVIDOS.txt` lá. Ele nunca sobrescreve dados que já estão em `%APPDATA%`.
+- **Testar sem mexer nos dados reais:** `java -Dfocaestudo.dados=C:\pasta\de\teste -cp bin StudyTracker`.
+- **Testar o aviso de versão pelo `.bat`:** acrescente `-Djpackage.app-version=1.0.0` (finge ser uma versão antiga).

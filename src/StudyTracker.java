@@ -11,13 +11,58 @@ import java.util.List;
 
 public class StudyTracker extends JFrame {
 
-    // Os arquivos de dados ficam SEMPRE na pasta do projeto, não no diretório
-    // de onde o programa foi iniciado. Antes, iniciar pelo .bat da raiz ou pelo
-    // de src/ gerava dois saves diferentes e a matéria "sumia".
-    private static final File BASE_DIR     = resolveBaseDir();
-    private static final File SAVE_FILE      = new File(BASE_DIR, "study_data.properties");
-    private static final File SESSION_FILE   = new File(BASE_DIR, "study_sessions.properties");
-    private static final File CHECKLIST_FILE = new File(BASE_DIR, "study_checklist.properties");
+    // Os dados ficam na pasta do usuário do Windows (%APPDATA%\FocaEstudo), não na
+    // pasta do programa: trocar de versão não perde nada e o .bat e o .exe usam o
+    // mesmo save. BASE_DIR (pasta do programa) só serve para migrar os dados das
+    // versões até a 1.0.2, que gravavam ao lado do programa.
+    private static final File BASE_DIR       = resolveBaseDir();
+    private static final File DATA_DIR       = resolveDataDir();
+    private static final File SAVE_FILE      = new File(DATA_DIR, "study_data.properties");
+    private static final File SESSION_FILE   = new File(DATA_DIR, "study_sessions.properties");
+    private static final File CHECKLIST_FILE = new File(DATA_DIR, "study_checklist.properties");
+    private static final String MIGRATED_MARKER = "DADOS_MOVIDOS.txt";
+    private static File migratedFrom = null;   // != null ⇒ avisar o usuário que os dados mudaram de lugar
+
+    private static File resolveDataDir() {
+        String custom = System.getProperty("focaestudo.dados");   // testes: java -Dfocaestudo.dados=<pasta>
+        if (custom != null && !custom.trim().isEmpty()) return new File(custom.trim());
+        String appData = System.getenv("APPDATA");
+        if (appData != null && new File(appData).isDirectory()) return new File(appData, "FocaEstudo");
+        return BASE_DIR;   // fora do Windows: continua ao lado do programa
+    }
+
+    /**
+     * Copia (não move) os dados da pasta do programa para DATA_DIR, uma vez só.
+     * Nunca sobrescreve: se DATA_DIR já tem dados, não mexe em nada.
+     */
+    private static void migrateLegacyData() {
+        if (DATA_DIR.getAbsoluteFile().equals(BASE_DIR.getAbsoluteFile())) return;
+        if (SAVE_FILE.exists()) return;
+        if (new File(BASE_DIR, MIGRATED_MARKER).exists()) return;
+        if (!new File(BASE_DIR, SAVE_FILE.getName()).isFile()) return;   // nada a migrar
+        try {
+            // study_data por último: é a existência dele que marca a migração como feita.
+            for (File f : new File[]{SESSION_FILE, CHECKLIST_FILE, SAVE_FILE})
+                for (String suf : new String[]{".bak", ""}) {
+                    File src = new File(BASE_DIR, f.getName() + suf);
+                    if (src.isFile())
+                        java.nio.file.Files.copy(src.toPath(), new File(DATA_DIR, src.getName()).toPath(),
+                                java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                                java.nio.file.StandardCopyOption.COPY_ATTRIBUTES);
+                }
+        } catch (IOException e) {
+            e.printStackTrace();   // sem study_data em DATA_DIR, a próxima abertura tenta de novo
+            return;
+        }
+        migratedFrom = BASE_DIR;
+        try {
+            java.nio.file.Files.write(new File(BASE_DIR, MIGRATED_MARKER).toPath(), (
+                    "A partir da versão 1.1.0, o FocaEstudo guarda seus dados em:\r\n"
+                  + "    " + DATA_DIR.getAbsolutePath() + "\r\n\r\n"
+                  + "Os arquivos study_*.properties desta pasta são a cópia antiga e não são mais usados.\r\n")
+                    .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        } catch (IOException ignored) {}   // sem permissão de escrita: só não deixa o aviso
+    }
 
     /** Descobre a raiz do projeto a partir da localização das classes (…/bin ⇒ raiz). */
     private static File resolveBaseDir() {
@@ -95,6 +140,8 @@ public class StudyTracker extends JFrame {
     private int     setReminderHour  = -1;     // hora do lembrete diário (0-23); -1 = desligado
     private int     setTransitionMin = 5;      // pausa sugerida entre blocos (min); 0 = desligado
     private int     setHyperfocusH   = 3;      // aviso de hiperfoco após N h seguidas; 0 = desligado
+    private boolean setUpdateCheck   = true;   // consulta o GitHub (1×/dia) se saiu versão nova
+    private String  updateCheckedDay = null;   // ISO date da última consulta que deu certo
 
     // --- Estado de recorrências ---
     private String  weeklySummaryShownWeek = null; // ISO "2026-W37" da última vez que mostrou o resumo
@@ -2499,7 +2546,7 @@ public class StudyTracker extends JFrame {
 
     private void exportData() {
         saveData(); saveSessions(); saveChecklist();   // garante que o disco está atualizado
-        JFileChooser fc = new JFileChooser(BASE_DIR);
+        JFileChooser fc = new JFileChooser();          // abre em Documentos
         fc.setSelectedFile(new File("focaestudo-backup-"
                 + java.time.LocalDate.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd"))
                 + ".txt"));
@@ -2520,7 +2567,7 @@ public class StudyTracker extends JFrame {
     }
 
     private void importData() {
-        JFileChooser fc = new JFileChooser(BASE_DIR);
+        JFileChooser fc = new JFileChooser();
         if (fc.showOpenDialog(this) != JFileChooser.APPROVE_OPTION) return;
         if (fc.getSelectedFile().length() > MAX_IMPORT_BYTES) {
             JOptionPane.showMessageDialog(this, "Arquivo grande demais para ser um backup do FocaEstudo.");
@@ -2593,6 +2640,7 @@ public class StudyTracker extends JFrame {
         // Volta os ajustes ao padrão: um backup sem alguma chave não pode herdar o valor antigo.
         setMinFocusMin = 1; setIdleMinutes = 10; setPomoAutoCycle = false;
         setReminderHour = -1; setTransitionMin = 5; setHyperfocusH = 3;
+        setUpdateCheck = true; updateCheckedDay = null;
         weeklySummaryShownWeek = null; reminderShownDay = null; balanceNudgeWeek = null;
         loadOk = true;
         // O planejador aberto guarda a lista de áreas antiga.
@@ -2664,14 +2712,28 @@ public class StudyTracker extends JFrame {
         JPanel backupRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
         JButton btnExport = new JButton("Exportar dados…");
         JButton btnImport = new JButton("Importar dados…");
-        btnExport.setFocusPainted(false); btnImport.setFocusPainted(false);
+        JButton btnFolder = new JButton("Abrir pasta dos dados");
+        btnExport.setFocusPainted(false); btnImport.setFocusPainted(false); btnFolder.setFocusPainted(false);
         btnExport.addActionListener(e -> exportData());
         btnImport.addActionListener(e -> importData());
-        backupRow.add(btnExport); backupRow.add(btnImport);
+        btnFolder.addActionListener(e -> {
+            try { Desktop.getDesktop().open(DATA_DIR); }
+            catch (Exception ex) { showInfoDialog("Pasta dos dados", DATA_DIR.getAbsolutePath()); }
+        });
+        backupRow.add(btnExport); backupRow.add(btnImport); backupRow.add(btnFolder);
         c.gridy = row++; c.insets = new Insets(2, 4, 4, 4);
         panel.add(backupRow, c);
         c.gridy = row++; c.insets = new Insets(0, 4, 4, 4);
         panel.add(dlgHint("Um arquivo único com matérias + histórico, para backup ou levar a outro PC."), c);
+
+        JCheckBox cbUpdate = new JCheckBox("Avisar quando sair uma versão nova", setUpdateCheck);
+        cbUpdate.setOpaque(false);
+        c.gridy = row++; c.insets = new Insets(12, 4, 2, 4);
+        panel.add(dlgLabel("Atualizações", true), c);
+        c.gridy = row++; c.insets = new Insets(2, 4, 4, 4);
+        panel.add(cbUpdate, c);
+        c.gridy = row++; c.insets = new Insets(0, 4, 4, 4);
+        panel.add(dlgHint("Consulta o GitHub no máximo 1× por dia. Nenhum dado seu é enviado."), c);
 
         int r = JOptionPane.showConfirmDialog(this, panel, "Ajustes",
                 JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
@@ -2682,6 +2744,7 @@ public class StudyTracker extends JFrame {
         setTransitionMin = (int) spTrans.getValue();
         setHyperfocusH   = (int) spHyper.getValue();
         setPomoAutoCycle = cbCycle.isSelected();
+        setUpdateCheck   = cbUpdate.isSelected();
         String rem = (String) cbReminder.getSelectedItem();
         setReminderHour = (rem == null || rem.startsWith("Des")) ? -1 : Integer.parseInt(rem.substring(0, 2));
         if (autoCycleCheck != null) autoCycleCheck.setSelected(setPomoAutoCycle);
@@ -2922,6 +2985,8 @@ public class StudyTracker extends JFrame {
         p.setProperty("__reminder_hour__", String.valueOf(setReminderHour));
         p.setProperty("__transition_min__", String.valueOf(setTransitionMin));
         p.setProperty("__hyperfocus_h__",   String.valueOf(setHyperfocusH));
+        p.setProperty("__update_check__",   String.valueOf(setUpdateCheck));
+        if (updateCheckedDay != null) p.setProperty("__update_checked_day__", updateCheckedDay);
         if (weeklySummaryShownWeek != null) p.setProperty("__week_summary_shown__", weeklySummaryShownWeek);
         if (reminderShownDay != null)       p.setProperty("__reminder_shown_day__", reminderShownDay);
         p.setProperty("__theme__", AppTheme.dark ? "dark" : "light");
@@ -3028,6 +3093,11 @@ public class StudyTracker extends JFrame {
                     try { setHyperfocusH = Math.max(0, Integer.parseInt(p.getProperty(k))); } catch (Exception ignored) {}
                     continue;
                 }
+                if (k.equals("__update_check__")) {
+                    setUpdateCheck = !"false".equalsIgnoreCase(p.getProperty(k));
+                    continue;
+                }
+                if (k.equals("__update_checked_day__")) { updateCheckedDay = p.getProperty(k); continue; }
                 if (k.equals("__week_summary_shown__")) { weeklySummaryShownWeek = p.getProperty(k); continue; }
                 if (k.equals("__reminder_shown_day__")) { reminderShownDay = p.getProperty(k); continue; }
                 if (k.equals("__archived__")) {
@@ -3219,8 +3289,85 @@ public class StudyTracker extends JFrame {
         ready = true;             // a partir daqui os saves são liberados
         if (freshStart) saveData(); // persiste as matérias criadas no primeiro uso
         setVisible(true);
+        if (migratedFrom != null)
+            showInfoDialog("Seus dados mudaram de lugar",
+                    "A partir desta versão, seus dados ficam guardados em:\n"
+                  + DATA_DIR.getAbsolutePath() + "\n\n"
+                  + "Assim você pode atualizar o FocaEstudo sem perder nada.\n"
+                  + "Os arquivos antigos continuam na pasta do programa, sem uso.");
         SwingUtilities.invokeLater(this::maybeShowWeeklySummary);
         setupReminder();
+        maybeCheckForUpdate();
+    }
+
+    // ── AVISO DE VERSÃO NOVA ───────────────────────────────────────────────
+
+    private static final String RELEASES_LATEST = "https://github.com/ErickDraber/FocaEstudo/releases/latest";
+
+    /** No máximo 1× por dia, pergunta ao GitHub qual é a última versão. Não envia dado nenhum. */
+    private void maybeCheckForUpdate() {
+        String atual = System.getProperty("jpackage.app-version");   // só existe no .exe
+        if (!setUpdateCheck || atual == null) return;
+        String hoje = LocalDate.now().toString();
+        if (hoje.equals(updateCheckedDay)) return;
+        Thread t = new Thread(() -> {
+            String nova = fetchLatestVersion();
+            if (nova == null) return;   // sem internet: tenta de novo na próxima abertura
+            SwingUtilities.invokeLater(() -> {
+                updateCheckedDay = hoje;
+                saveData();
+                if (compareVersions(nova, atual) > 0) showUpdateDialog(atual, nova);
+            });
+        }, "FocaEstudo-atualizacao");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    /** O GitHub redireciona /releases/latest para /releases/tag/vX.Y.Z: a versão vem do endereço. */
+    private static String fetchLatestVersion() {
+        java.net.HttpURLConnection con = null;
+        try {
+            con = (java.net.HttpURLConnection) java.net.URI.create(RELEASES_LATEST).toURL().openConnection();
+            con.setInstanceFollowRedirects(false);
+            con.setRequestMethod("HEAD");
+            con.setConnectTimeout(5000);
+            con.setReadTimeout(5000);
+            con.setRequestProperty("User-Agent", "FocaEstudo");
+            String loc = con.getHeaderField("Location");
+            if (loc == null) return null;
+            java.util.regex.Matcher m = java.util.regex.Pattern
+                    .compile("/releases/tag/v?(\\d{1,4}\\.\\d{1,4}\\.\\d{1,4})$").matcher(loc);
+            return m.find() ? m.group(1) : null;
+        } catch (Exception e) {
+            return null;
+        } finally {
+            if (con != null) con.disconnect();
+        }
+    }
+
+    /** Compara "1.10.0" com "1.9.2" número a número. */
+    private static int compareVersions(String a, String b) {
+        String[] x = a.split("\\."), y = b.split("\\.");
+        for (int i = 0; i < Math.max(x.length, y.length); i++) {
+            int dx = 0, dy = 0;
+            try { if (i < x.length) dx = Integer.parseInt(x[i].trim()); } catch (NumberFormatException ignored) {}
+            try { if (i < y.length) dy = Integer.parseInt(y[i].trim()); } catch (NumberFormatException ignored) {}
+            if (dx != dy) return Integer.compare(dx, dy);
+        }
+        return 0;
+    }
+
+    private void showUpdateDialog(String atual, String nova) {
+        Object[] opts = {"Abrir página de download", "Agora não"};
+        int r = JOptionPane.showOptionDialog(this,
+                "Saiu a versão " + nova + " do FocaEstudo (você está usando a " + atual + ").\n\n"
+              + "Para atualizar: baixe o zip, feche o FocaEstudo e extraia por cima da pasta atual.\n"
+              + "Seus dados ficam guardados fora da pasta do programa, então nada se perde.",
+                "Versão nova", JOptionPane.DEFAULT_OPTION, JOptionPane.INFORMATION_MESSAGE,
+                null, opts, opts[0]);
+        if (r != 0) return;
+        try { Desktop.getDesktop().browse(java.net.URI.create(RELEASES_LATEST)); }
+        catch (Exception e) { showInfoDialog("Versão nova", "Baixe em:\n" + RELEASES_LATEST); }
     }
 
     // ── LEMBRETE DIÁRIO (item 8) ───────────────────────────────────────────
@@ -3347,7 +3494,7 @@ public class StudyTracker extends JFrame {
     // Mantido vivo pela duração do processo: o SO libera o lock quando o processo termina.
     @SuppressWarnings("unused")
     private static java.nio.channels.FileLock instanceLock;
-    private static final File LOCK_FILE = new File(BASE_DIR, "focaestudo.lock");
+    private static final File LOCK_FILE = new File(DATA_DIR, "focaestudo.lock");
 
     /**
      * Garante uma única instância: duas cópias gravando o mesmo save corrompem os dados.
@@ -3367,6 +3514,7 @@ public class StudyTracker extends JFrame {
     }
 
     public static void main(String[] args) {
+        DATA_DIR.mkdirs();
         if (!acquireSingleInstanceLock()) {
             int r = JOptionPane.showConfirmDialog(null,
                     "O FocaEstudo parece já estar aberto.\n"
@@ -3374,6 +3522,7 @@ public class StudyTracker extends JFrame {
                     "FocaEstudo", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
             if (r != JOptionPane.YES_OPTION) System.exit(0);
         }
+        migrateLegacyData();   // depois da trava: duas instâncias não migram ao mesmo tempo
         AppTheme.installLookAndFeel();
         SwingUtilities.invokeLater(() -> new StudyTracker().initializeUI());
     }

@@ -26,7 +26,7 @@ Rastreador de estudos com foco, desenvolvido em Java Swing para desktop.
 3. Abra a pasta **FocaEstudo** e dê dois cliques em **`FocaEstudo.exe`**
 4. Se aparecer "O Windows protegeu o computador", clique em **Mais informações → Executar assim mesmo** (só na primeira vez)
 
-> ⚠️ Não abra direto de dentro do `.zip` nem coloque a pasta em "Arquivos de Programas" — os dados são salvos na própria pasta do programa.
+> ⚠️ Não abra direto de dentro do `.zip`. Os dados ficam em `%APPDATA%\FocaEstudo`, fora da pasta do programa: para atualizar, é só extrair a versão nova por cima.
 
 Instruções completas ficam no `LEIA-ME.txt` dentro do zip.
 

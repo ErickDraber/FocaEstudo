@@ -14,5 +14,8 @@
 # Trava de instância única (criada pelo app ao abrir)
 /focaestudo.lock
 
+# Aviso deixado pela migração dos dados para %APPDATA% (v1.1.0)
+/DADOS_MOVIDOS.txt
+
 # Compilados (gerados pelo Executar_Programa.bat)
 /bin/
