@@ -7,10 +7,10 @@ import java.util.List;
 
 /**
  * Grade da semana: Seg–Dom × Manhã/Tarde/Noite. Cada turno pode ter várias áreas.
- * Clique num turno para marcar/desmarcar áreas. O dia de hoje fica no card "Hoje" da tela principal;
- * esta janela é só para editar.
+ * Clique num turno para marcar/desmarcar áreas. É a tela "Semana" da janela principal; o dia de
+ * hoje também aparece no cartão "Hoje".
  */
-public class PlannerPanel extends JDialog {
+public class PlannerPanel extends JPanel {
 
     static final String[] DOW        = {"Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"};
     static final String[] DOW_LONG   = {"segunda", "terça", "quarta", "quinta", "sexta", "sábado", "domingo"};
@@ -24,25 +24,22 @@ public class PlannerPanel extends JDialog {
         return h >= 5 && h < 12 ? 0 : h >= 12 && h < 18 ? 1 : 2;
     }
 
-    private final List<String> areas;
-    private final Map<String, Color> colors;
+    private List<String> areas;
+    private Map<String, Color> colors;
     private final Map<String, List<String>> plan;   // "1_m" -> áreas, na ordem em que foram postas
     private final Runnable onChange;
     private final Runnable onAutofill;
     private final JPanel grid;
 
-    public PlannerPanel(JFrame owner, List<String> areas, Map<String, Color> colors,
+    public PlannerPanel(List<String> areas, Map<String, Color> colors,
                         Map<String, List<String>> plan, Runnable onChange, Runnable onAutofill) {
-        super(owner, "Semana", false);
         this.areas = areas;
         this.colors = colors;
         this.plan = plan;
         this.onChange = onChange != null ? onChange : () -> {};
         this.onAutofill = onAutofill;
 
-        setSize(820, 460);
-        setLocationRelativeTo(owner);
-        getContentPane().setBackground(AppTheme.BG);
+        setBackground(AppTheme.BG);
         setLayout(new BorderLayout(0, 0));
 
         add(buildHeader(), BorderLayout.NORTH);
@@ -91,6 +88,13 @@ public class PlannerPanel extends JDialog {
         h.add(txt, BorderLayout.WEST);
         h.add(btns, BorderLayout.EAST);
         return h;
+    }
+
+    /** Áreas ou cores mudaram (área nova, renomeada, arquivada…): redesenha a grade. */
+    void setAreas(List<String> areas, Map<String, Color> colors) {
+        this.areas = areas;
+        this.colors = colors;
+        rebuild();
     }
 
     void rebuild() {

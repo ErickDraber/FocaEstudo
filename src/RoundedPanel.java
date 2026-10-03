@@ -18,6 +18,16 @@ public class RoundedPanel extends JPanel {
         this(radius, bgColor, true);
     }
 
+    private Color borderColor = null;   // null = CARD_BORDER do tema
+    private float borderWidth = 1f;
+
+    /** Borda de destaque (ex.: o cartão "Agora"). */
+    public void setBorderColor(Color c, float width) {
+        borderColor = c;
+        borderWidth = width;
+        repaint();
+    }
+
     @Override
     protected void paintComponent(Graphics g) {
         Graphics2D g2 = (Graphics2D) g.create();
@@ -35,9 +45,10 @@ public class RoundedPanel extends JPanel {
         g2.setColor(bgColor);
         g2.fillRoundRect(0, 0, w - 2, h - 4, radius, radius);
 
-        g2.setColor(AppTheme.CARD_BORDER);
-        g2.setStroke(new BasicStroke(1f));
-        g2.drawRoundRect(0, 0, w - 3, h - 5, radius, radius);
+        g2.setColor(borderColor != null ? borderColor : AppTheme.CARD_BORDER);
+        g2.setStroke(new BasicStroke(borderWidth));
+        int o = (int) Math.floor(borderWidth / 2);   // borda grossa não sai do desenho
+        g2.drawRoundRect(o, o, w - 3 - 2 * o, h - 5 - 2 * o, radius, radius);
 
         g2.dispose();
         super.paintComponent(g);

@@ -132,7 +132,9 @@ public class HistoryPanel extends JDialog {
                 default         -> "Cronômetro";
             };
             if (!s.getKind().isEmpty()) typeLabel += " · " + kindLabel(s.getKind());
-            if (s.getEnergy() > 0) typeLabel += "  " + new String[]{"", "😴", "🙂", "🔥"}[s.getEnergy()];
+            // Texto, não emoji: a fonte do Swing no Windows mostra 😴 🙂 🔥 como quadrados.
+            if (s.getEnergy() >= 1 && s.getEnergy() <= 3)
+                typeLabel += " · energia " + new String[]{"", "baixa", "ok", "alta"}[s.getEnergy()];
             JLabel type = new JLabel(typeLabel);
             type.setFont(AppTheme.FONT_SMALL); type.setForeground(AppTheme.TEXT_SEC);
             type.setAlignmentX(Component.RIGHT_ALIGNMENT);

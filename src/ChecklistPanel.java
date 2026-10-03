@@ -126,7 +126,7 @@ public class ChecklistPanel extends JDialog {
             txt.setForeground(it.done ? AppTheme.TEXT_SEC : AppTheme.TEXT_PRI);
             if (it.done) txt.setText("<html><strike>" + escape(txt.getText()) + "</strike></html>");
 
-            JButton del = new JButton("✕");
+            JButton del = new JButton("x");
             del.setMargin(new Insets(0, 6, 0, 6));
             del.setFocusPainted(false);
             del.setToolTipText("Remover");
@@ -145,7 +145,7 @@ public class ChecklistPanel extends JDialog {
             es.setAlignmentX(Component.CENTER_ALIGNMENT);
             listPanel.add(es);
         } else {
-            JLabel resumo = new JLabel(pend == 0 ? "Tudo feito! 🎉"
+            JLabel resumo = new JLabel(pend == 0 ? "Tudo feito!"
                     : pend + " pendente(s)" + (pendMin > 0 ? "  ·  ~" + fmt(pendMin) + " estimados" : ""));
             resumo.setFont(AppTheme.FONT_SMALL); resumo.setForeground(AppTheme.TEXT_SEC);
             resumo.setAlignmentX(Component.CENTER_ALIGNMENT);

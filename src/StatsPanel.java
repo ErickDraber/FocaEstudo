@@ -137,7 +137,7 @@ public class StatsPanel extends JDialog {
         p.setLayout(new BoxLayout(p, BoxLayout.Y_AXIS));
         p.setOpaque(false);
         p.setAlignmentX(Component.LEFT_ALIGNMENT);
-        String[] icons = {"", "😴", "🙂", "🔥"};
+        String[] icons = {"", "baixa", "ok", "alta"};   // texto: emoji vira quadrado no Windows
         for (int i = 0; i < 4; i++) {
             JPanel row = new JPanel(new BorderLayout(8, 0));
             row.setOpaque(false);

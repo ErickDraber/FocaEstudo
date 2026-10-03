@@ -255,11 +255,8 @@ public class CalendarPanel extends JPanel {
                 bar.setAlignmentX(CENTER_ALIGNMENT);
                 cell.add(Box.createVerticalStrut(2));
                 cell.add(bar);
-
-                JLabel icon = new JLabel(metGoal ? "✅" : "❌", SwingConstants.CENTER);
-                icon.setFont(new Font("Segoe UI", Font.PLAIN, 8));
-                icon.setAlignmentX(CENTER_ALIGNMENT);
-                cell.add(icon);
+                // Sem ✅/❌: viravam quadrado no Windows, e um X vermelho no dia que não deu
+                // é cobrança (pilar "sem punição"). A barra já mostra o quanto foi feito.
             }
         }
 

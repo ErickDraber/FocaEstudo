@@ -141,6 +141,8 @@ public class StudyTracker extends JFrame {
     private int     setTransitionMin = 5;      // pausa sugerida entre blocos (min); 0 = desligado
     private int     setHyperfocusH   = 3;      // aviso de hiperfoco após N h seguidas; 0 = desligado
     private boolean setUpdateCheck   = true;   // consulta o GitHub (1×/dia) se saiu versão nova
+    private boolean setFocusMode     = true;   // ao começar uma sessão, a janela vira a faixa do modo foco
+    private boolean setAskDetails    = true;   // ao terminar, pergunta sub-foco, energia e nota
     private String  updateCheckedDay = null;   // ISO date da última consulta que deu certo
 
     // --- Estado de recorrências ---
@@ -152,15 +154,11 @@ public class StudyTracker extends JFrame {
     // --- Manual ---
     private JTextField hoursField, minutesField;
 
-    // --- Nota + tipo de atividade aplicados à próxima sessão salva ---
-    private JTextField noteField;
-    private JComboBox<String> kindCombo;
-    private JComboBox<String> energyCombo;
-    private static final String[] ENERGY_LABELS = {"–", "😴 baixa", "🙂 ok", "🔥 alta"};
-    private static final String[] ENERGY_ICON   = {"", "😴", "🙂", "🔥"};
+    // --- Detalhes da sessão: perguntados AO TERMINAR, não antes (menos decisões para começar) ---
+    private String pendingSubFoco;   // sub-foco já escolhido (ex.: rodízio do "Agora"); vem marcado no "Como foi?"
+    private static final String[] ENERGY_TEXT = {"", "Baixa", "Ok", "Alta"};
     private static final String[] KIND_LABELS = {"–", "Teoria", "Exercícios", "Revisão", "Outro"};
     private static final String[] KIND_KEYS   = {"", "teoria", "exercicios", "revisao", "outro"};
-    private static final String KIND_MANAGE = "＋ gerenciar sub-focos…";
 
     // Sub-focos por área: tópicos / grupos musculares / hobbies. Ordem preservada.
     private final Map<String, java.util.List<String>> subFocos = new LinkedHashMap<>();
@@ -177,7 +175,6 @@ public class StudyTracker extends JFrame {
     private final Map<String, String> areaType = new LinkedHashMap<>();
     private static final String[] TYPE_KEYS   = {"estudo", "fisico", "lazer", "trabalho", "outro"};
     private static final String[] TYPE_LABELS = {"Estudo", "Físico", "Lazer", "Trabalho", "Outro"};
-    private static final String[] TYPE_ICONS  = {"📚", "💪", "🎮", "💼", "•"};
     // Meta mínima semanal por TIPO (minutos). 0/ausente = sem meta de equilíbrio.
     private final Map<String, Integer> typeGoalWeek = new LinkedHashMap<>();
     private String balanceNudgeWeek = null;   // ISO "2026-W37" da última vez que avisou desequilíbrio
@@ -248,9 +245,10 @@ public class StudyTracker extends JFrame {
         KeyboardFocusManager.getCurrentKeyboardFocusManager().addKeyEventDispatcher(e -> {
             if (e.getID() != KeyEvent.KEY_PRESSED || e.getKeyCode() != KeyEvent.VK_SPACE) return false;
             KeyboardFocusManager kfm = KeyboardFocusManager.getCurrentKeyboardFocusManager();
-            if (kfm.getFocusedWindow() != this) return false;               // diálogo aberto: ignora
+            Window fw = kfm.getFocusedWindow();
+            if (fw != this && (focusBar == null || fw != focusBar)) return false;   // diálogo aberto: ignora
             if (kfm.getFocusOwner() instanceof javax.swing.text.JTextComponent) return false;
-            toggleStopwatch();
+            if (focusBar != null) focusTogglePause(); else toggleStopwatch();
             return true;   // consome o espaço
         });
     }
@@ -287,7 +285,7 @@ public class StudyTracker extends JFrame {
 
         idleAsking = true;
         stopStopwatch();                       // pausa enquanto pergunta
-        int r = JOptionPane.showConfirmDialog(this,
+        int r = JOptionPane.showConfirmDialog(dialogOwner(),
                 "Sem atividade há " + setIdleMinutes + " min.\nAinda está estudando?",
                 "Continuar?", JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE);
         idleAsking = false;
@@ -298,58 +296,485 @@ public class StudyTracker extends JFrame {
 
     // ── BUILD UI ────────────────────────────────────────────────────────────
 
+    // A janela é uma barra lateral + uma tela por vez (Hoje, Semana, Progresso, Áreas).
+    // Antes era tudo numa tela só: o cronômetro dominava e os cartões ficavam espremidos.
+    private static final String SCR_HOJE = "hoje", SCR_SEMANA = "semana",
+                                SCR_PROGRESSO = "progresso", SCR_AREAS = "areas";
+    private SideNav      sideNav;
+    private JPanel       screens;
+    private String       currentScreen = SCR_HOJE;
+    private PlannerPanel weekScreen;
+    private JPanel       areasBody;
+
     private void buildUI() {
-        add(buildTopBar(),    BorderLayout.NORTH);
-        add(buildCenter(),    BorderLayout.CENTER);
-        add(buildBottom(),    BorderLayout.SOUTH);
+        screens = new JPanel(new CardLayout());
+        screens.setBackground(AppTheme.BG);
+        screens.add(buildTodayScreen(),    SCR_HOJE);
+        screens.add(buildWeekScreen(),     SCR_SEMANA);
+        screens.add(buildProgressScreen(), SCR_PROGRESSO);
+        screens.add(buildAreasScreen(),    SCR_AREAS);
+
+        add(buildSideNav(), BorderLayout.WEST);
+        add(screens,        BorderLayout.CENTER);
+        showScreen(currentScreen);
     }
 
-    private JPanel buildTopBar() {
-        JPanel bar = new JPanel(new BorderLayout(12, 0));
-        bar.setBackground(AppTheme.SURFACE);
-        bar.setBorder(new CompoundBorder(
-                BorderFactory.createMatteBorder(0, 0, 1, 0, AppTheme.DIVIDER),
-                new EmptyBorder(12, 20, 12, 16)));
+    private void showScreen(String key) {
+        currentScreen = key;
+        ((CardLayout) screens.getLayout()).show(screens, key);
+        sideNav.select(key);
+    }
 
-        JPanel left = new JPanel(new GridLayout(2, 1, 0, 2));
-        left.setOpaque(false);
-        JLabel title = new JLabel("FocaEstudo");
-        title.setFont(AppTheme.FONT_TITLE);
-        title.setForeground(AppTheme.TEXT_PRI);
-        tvTotal = new JLabel("Total: 0h 00min");
-        tvTotal.setFont(AppTheme.FONT_SMALL);
-        tvTotal.setForeground(AppTheme.TEXT_SEC);
-        left.add(title); left.add(tvTotal);
-
-        JPanel right = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
-        right.setOpaque(false);
-
-        StyledButton btnHistory = new StyledButton("Histórico", StyledButton.Variant.TEXT);
-        btnHistory.addActionListener(e -> showHistory());
-
-        StyledButton btnStats = new StyledButton("Estatísticas", StyledButton.Variant.TEXT);
-        btnStats.addActionListener(e -> new StatsPanel(this, sessions, studyDataMap).setVisible(true));
-
-        StyledButton btnTasks = new StyledButton("Tarefas", StyledButton.Variant.TEXT);
-        btnTasks.addActionListener(e -> new ChecklistPanel(this, checklist, studyDataMap, () -> {
+    private SideNav buildSideNav() {
+        sideNav = new SideNav("FocaEstudo");
+        tvTotal = sideNav.subtitle();
+        sideNav.addScreen(SCR_HOJE,      "Hoje",      () -> showScreen(SCR_HOJE));
+        sideNav.addScreen(SCR_SEMANA,    "Semana",    () -> showScreen(SCR_SEMANA));
+        sideNav.addScreen(SCR_PROGRESSO, "Progresso", () -> showScreen(SCR_PROGRESSO));
+        sideNav.addScreen(SCR_AREAS,     "Áreas",     () -> showScreen(SCR_AREAS));
+        sideNav.addAction("Tarefas", () -> new ChecklistPanel(this, checklist, studyDataMap, () -> {
             saveChecklist(); refreshProgressCard();
         }).setVisible(true));
+        sideNav.addAction("Ajustes", this::showSettingsDialog);
+        sideNav.addAction("Tema",    this::toggleTheme);
+        return sideNav;
+    }
 
-        StyledButton btnSettings = new StyledButton("Ajustes", StyledButton.Variant.TEXT);
-        btnSettings.addActionListener(e -> showSettingsDialog());
+    /** Cabeçalho das telas: título + dica + botões à direita (opcionais). */
+    private JPanel screenHeader(String title, String hint, JComponent... actions) {
+        JPanel h = new JPanel(new BorderLayout(12, 0));
+        h.setBackground(AppTheme.SURFACE);
+        h.setBorder(new CompoundBorder(
+                BorderFactory.createMatteBorder(0, 0, 1, 0, AppTheme.DIVIDER),
+                new EmptyBorder(12, 16, 12, 16)));
+        JPanel txt = new JPanel(new GridLayout(hint != null ? 2 : 1, 1, 0, 2));
+        txt.setOpaque(false);
+        JLabel t = new JLabel(title);
+        t.setFont(AppTheme.FONT_SECTION); t.setForeground(AppTheme.TEXT_PRI);
+        txt.add(t);
+        if (hint != null) {
+            JLabel l = new JLabel(hint);
+            l.setFont(AppTheme.FONT_SMALL); l.setForeground(AppTheme.TEXT_SEC);
+            txt.add(l);
+        }
+        JPanel btns = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
+        btns.setOpaque(false);
+        for (JComponent a : actions) btns.add(a);
+        h.add(txt,  BorderLayout.WEST);
+        h.add(btns, BorderLayout.EAST);
+        return h;
+    }
 
-        StyledButton btnTheme = new StyledButton("Tema", StyledButton.Variant.TEXT);
-        btnTheme.addActionListener(e -> toggleTheme());
+    /** Painel que acompanha a largura do scroll (sem rolagem horizontal). */
+    private static class ScrollBody extends JPanel implements Scrollable {
+        ScrollBody(LayoutManager lm) { super(lm); setOpaque(false); }
+        public Dimension getPreferredScrollableViewportSize() { return getPreferredSize(); }
+        public int getScrollableUnitIncrement(Rectangle r, int o, int d) { return 16; }
+        public int getScrollableBlockIncrement(Rectangle r, int o, int d) { return r.height - 32; }
+        public boolean getScrollableTracksViewportWidth()  { return true; }
+        public boolean getScrollableTracksViewportHeight() { return false; }
+    }
 
-        right.add(btnHistory);
-        right.add(btnStats);
-        right.add(btnTasks);
-        right.add(btnSettings);
-        right.add(btnTheme);
+    private static JScrollPane quietScroll(JComponent body) {
+        JScrollPane sp = new JScrollPane(body,
+                JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED, JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+        sp.setBorder(null);
+        sp.setOpaque(false);
+        sp.getViewport().setOpaque(false);
+        sp.getVerticalScrollBar().setUnitIncrement(16);
+        return sp;
+    }
 
-        bar.add(left,  BorderLayout.WEST);
-        bar.add(right, BorderLayout.EAST);
-        return bar;
+    // ── TELA HOJE: o que fazer agora + cronômetro ──────────────────────────
+
+    // Ordem de leitura de cima para baixo: o que fazer agora → o resto de hoje → a semana.
+    // Metas completas e Equilíbrio foram para a tela Progresso; aqui só o que importa hoje.
+    private JLabel todayDateLabel, todayConsistency;
+    private JPanel todayGoalsBody, weekStripBody;
+
+    private JPanel buildTodayScreen() {
+        ScrollBody body = new ScrollBody(new GridBagLayout());
+        body.setBorder(new EmptyBorder(12, 12, 12, 12));
+        GridBagConstraints c = new GridBagConstraints();
+        c.gridx = 0; c.weightx = 1; c.fill = GridBagConstraints.HORIZONTAL;
+        c.anchor = GridBagConstraints.NORTH;
+
+        JPanel meio = new JPanel(new GridLayout(1, 2, 12, 0));
+        meio.setOpaque(false);
+        meio.add(cardColumn(buildTodayCard()));
+        meio.add(cardColumn(buildTodayGoalsCard()));
+
+        c.gridy = 0; body.add(buildNowCard(), c);
+        c.gridy = 1; c.insets = new Insets(12, 0, 0, 0); body.add(meio, c);
+        c.gridy = 2; body.add(buildWeekStrip(), c);
+        c.gridy = 3; c.weighty = 1; body.add(Box.createGlue(), c);
+
+        JPanel p = new JPanel(new BorderLayout());
+        p.setBackground(AppTheme.BG);
+        p.add(buildTodayHeader(), BorderLayout.NORTH);
+        p.add(quietScroll(body),  BorderLayout.CENTER);
+        p.add(buildBottom(),      BorderLayout.SOUTH);
+        return p;
+    }
+
+    private JPanel buildTodayHeader() {
+        todayDateLabel = new JLabel(" ");
+        todayDateLabel.setFont(AppTheme.FONT_SECTION);
+        todayDateLabel.setForeground(AppTheme.TEXT_PRI);
+        todayConsistency = new JLabel(" ");
+        todayConsistency.setFont(AppTheme.FONT_SMALL);
+        todayConsistency.setToolTipText("Dias com algum tempo registrado (ou marcados como difíceis). Não zera: só olha a última semana.");
+        RoundedPanel pill = new RoundedPanel(12, AppTheme.SURFACE2, false);
+        pill.setLayout(new FlowLayout(FlowLayout.CENTER, 0, 0));
+        pill.setBorder(new EmptyBorder(4, 12, 4, 12));
+        pill.add(todayConsistency);
+
+        JPanel h = new JPanel(new BorderLayout(12, 0));
+        h.setBackground(AppTheme.SURFACE);
+        h.setBorder(new CompoundBorder(
+                BorderFactory.createMatteBorder(0, 0, 1, 0, AppTheme.DIVIDER),
+                new EmptyBorder(12, 16, 12, 16)));
+        JPanel right = new JPanel(new FlowLayout(FlowLayout.RIGHT, 0, 0));
+        right.setOpaque(false);
+        right.add(pill);
+        h.add(todayDateLabel, BorderLayout.WEST);
+        h.add(right,          BorderLayout.EAST);
+        return h;
+    }
+
+    /** "Sábado, 3 de outubro" + "N dos últimos 7 dias" (janela móvel: nunca volta a zero de uma vez). */
+    private void refreshTodayHeader() {
+        if (todayDateLabel == null) return;
+        LocalDate hoje = LocalDate.now();
+        String d = hoje.format(java.time.format.DateTimeFormatter.ofPattern(
+                "EEEE, d 'de' MMMM", Locale.forLanguageTag("pt-BR")));
+        todayDateLabel.setText(Character.toUpperCase(d.charAt(0)) + d.substring(1));
+
+        int dias = 0;
+        for (int i = 0; i < 7; i++) {
+            LocalDate dd = hoje.minusDays(i);
+            if (isHardDay(dd) || minutesOnDay(null, dd) > 0) dias++;
+        }
+        todayConsistency.setText(dias == 0 ? "Um bloco hoje já conta" : dias + " dos últimos 7 dias");
+        todayConsistency.setForeground(dias == 0 ? AppTheme.TEXT_SEC : AppTheme.SUCCESS);
+    }
+
+    // ── Cartão "Metas de hoje": só as áreas com meta hoje, com barra ───────
+
+    private JComponent buildTodayGoalsCard() {
+        RoundedPanel card = new RoundedPanel(18, AppTheme.SURFACE);
+        card.setLayout(new BorderLayout(0, 8));
+        card.setBorder(new EmptyBorder(14, 16, 14, 16));
+        JLabel title = new JLabel("Metas de hoje");
+        title.setFont(AppTheme.FONT_SECTION);
+        title.setForeground(AppTheme.TEXT_PRI);
+        StyledButton edit = new StyledButton("editar metas", StyledButton.Variant.TEXT);
+        edit.setFont(AppTheme.FONT_SMALL);
+        edit.addActionListener(e -> showManageGoalsDialog());
+        JPanel head = new JPanel(new BorderLayout());
+        head.setOpaque(false);
+        head.add(title, BorderLayout.WEST);
+        head.add(edit,  BorderLayout.EAST);
+        card.add(head, BorderLayout.NORTH);
+        todayGoalsBody = new JPanel();
+        todayGoalsBody.setLayout(new BoxLayout(todayGoalsBody, BoxLayout.Y_AXIS));
+        todayGoalsBody.setOpaque(false);
+        card.add(todayGoalsBody, BorderLayout.CENTER);
+        return card;
+    }
+
+    private void refreshTodayGoalsCard() {
+        if (todayGoalsBody == null) return;
+        todayGoalsBody.removeAll();
+        LocalDate hoje = LocalDate.now();
+        boolean any = false;
+        if (!isHardDay(hoje))   // dia difícil: nenhuma barra cobrando
+        for (String t : TYPE_KEYS)
+            for (String a : studyDataMap.keySet()) {
+                if (archived.contains(a) || !typeOf(a).equals(t)) continue;
+                int ideal = goals.getOrDefault(a, 0);
+                if (ideal <= 0 || !isGoalDay(a, hoje)) continue;
+                if (any) todayGoalsBody.add(Box.createVerticalStrut(8));
+                any = true;
+                todayGoalsBody.add(todayGoalRow(a, minutesOnDay(a, hoje), dailyMinFor(a), ideal));
+            }
+        if (!any) {
+            JLabel l = new JLabel(isHardDay(hoje) ? "Dia difícil: nada é cobrado hoje." : "Nenhuma meta para hoje.");
+            l.setFont(AppTheme.FONT_SMALL); l.setForeground(AppTheme.TEXT_SEC);
+            l.setAlignmentX(Component.LEFT_ALIGNMENT);
+            todayGoalsBody.add(l);
+        }
+        todayGoalsBody.revalidate();
+        todayGoalsBody.repaint();
+    }
+
+    /** Nome · "40 / 90 min" (ou "feito") e a barra na cor da área. */
+    private JComponent todayGoalRow(String area, int feito, int minimo, int ideal) {
+        Color cor = studyDataMap.get(area).getColor();
+        JPanel row = new JPanel(new BorderLayout(0, 3));
+        row.setOpaque(false);
+        row.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+        JLabel nome = new JLabel(area, PlannerPanel.dot(cor), SwingConstants.LEFT);
+        nome.setIconTextGap(6);
+        nome.setFont(AppTheme.FONT_LABEL);
+        nome.setForeground(AppTheme.TEXT_PRI);
+        boolean bateuMin = feito >= minimo;
+        JLabel val = new JLabel(feito >= ideal ? "feito"
+                : bateuMin ? fmtHM(feito) + " · mínimo feito"
+                : fmtHM(feito) + " / " + fmtHM(ideal));
+        val.setFont(AppTheme.FONT_SMALL);
+        val.setForeground(bateuMin ? AppTheme.SUCCESS : AppTheme.TEXT_SEC);
+        JPanel top = new JPanel(new BorderLayout(8, 0));
+        top.setOpaque(false);
+        top.add(nome, BorderLayout.WEST);
+        top.add(val,  BorderLayout.EAST);
+
+        GaugeBar bar = new GaugeBar();
+        bar.setPreferredSize(new Dimension(0, 8));
+        bar.set(feito / (double) ideal, cor, feito >= ideal);
+        row.add(top, BorderLayout.NORTH);
+        row.add(bar, BorderLayout.CENTER);
+        return row;
+    }
+
+    // ── Faixa "Esta semana": o plano da semana à vista, sem abrir a grade ──
+
+    private JComponent buildWeekStrip() {
+        RoundedPanel card = new RoundedPanel(18, AppTheme.SURFACE);
+        card.setLayout(new BorderLayout(0, 8));
+        card.setBorder(new EmptyBorder(12, 16, 12, 16));
+        JLabel title = new JLabel("Esta semana");
+        title.setFont(AppTheme.FONT_SECTION);
+        title.setForeground(AppTheme.TEXT_PRI);
+        StyledButton edit = new StyledButton("editar semana", StyledButton.Variant.TEXT);
+        edit.setFont(AppTheme.FONT_SMALL);
+        edit.addActionListener(e -> openPlanner());
+        JPanel head = new JPanel(new BorderLayout());
+        head.setOpaque(false);
+        head.add(title, BorderLayout.WEST);
+        head.add(edit,  BorderLayout.EAST);
+        card.add(head, BorderLayout.NORTH);
+        weekStripBody = new JPanel(new GridLayout(1, 7, 6, 0));
+        weekStripBody.setOpaque(false);
+        card.add(weekStripBody, BorderLayout.CENTER);
+        return card;
+    }
+
+    private void refreshWeekStrip() {
+        if (weekStripBody == null) return;
+        weekStripBody.removeAll();
+        LocalDate hoje = LocalDate.now(), seg = weekStart(hoje);
+        for (int d = 1; d <= 7; d++) {
+            LocalDate dia = seg.plusDays(d - 1);
+            boolean eHoje = dia.equals(hoje);
+            JPanel col = eHoje ? new RoundedPanel(10, AppTheme.SURFACE2, false) : new JPanel();
+            col.setOpaque(false);
+            col.setLayout(new BoxLayout(col, BoxLayout.Y_AXIS));
+            col.setBorder(new EmptyBorder(4, 4, 6, 4));
+            col.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+            col.setToolTipText("Abrir a semana");
+            col.addMouseListener(new MouseAdapter() {
+                @Override public void mouseClicked(MouseEvent e) { openPlanner(); }
+            });
+
+            JLabel nome = new JLabel(PlannerPanel.DOW[d - 1], SwingConstants.CENTER);
+            nome.setFont(eHoje ? AppTheme.FONT_BOLD : AppTheme.FONT_SMALL);
+            nome.setForeground(eHoje ? AppTheme.ACCENT : AppTheme.TEXT_SEC);
+            nome.setAlignmentX(Component.CENTER_ALIGNMENT);
+            col.add(nome);
+            col.add(Box.createVerticalStrut(4));
+
+            // Bolinha cheia = já fez algo dessa área no dia; anel = planejado (ainda não).
+            JPanel dots = new JPanel(new FlowLayout(FlowLayout.CENTER, 3, 1));
+            dots.setOpaque(false);
+            java.util.LinkedHashSet<String> doDia = new java.util.LinkedHashSet<>();
+            for (int s = 0; s < 3; s++) doDia.addAll(plannedAreas(d, s));
+            for (String a : doDia) {
+                boolean fez = !dia.isAfter(hoje) && minutesOnDay(a, dia) > 0;
+                JLabel dot = new JLabel(dayDot(studyDataMap.get(a).getColor(), fez));
+                dot.setToolTipText(a + (fez ? " · feito" : ""));
+                dots.add(dot);
+            }
+            if (doDia.isEmpty()) {
+                JLabel l = new JLabel("livre");
+                l.setFont(AppTheme.FONT_CAPTION); l.setForeground(AppTheme.TEXT_MUT);
+                dots.add(l);
+            }
+            dots.setAlignmentX(Component.CENTER_ALIGNMENT);
+            col.add(dots);
+            weekStripBody.add(col);
+        }
+        weekStripBody.revalidate();
+        weekStripBody.repaint();
+    }
+
+    private static Icon dayDot(Color c, boolean cheio) {
+        return new Icon() {
+            public int getIconWidth()  { return 10; }
+            public int getIconHeight() { return 10; }
+            public void paintIcon(Component comp, Graphics g, int x, int y) {
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                g2.setColor(c);
+                if (cheio) g2.fillOval(x, y, 10, 10);
+                else { g2.setStroke(new BasicStroke(1.6f)); g2.drawOval(x + 1, y + 1, 8, 8); }
+                g2.dispose();
+            }
+        };
+    }
+
+    /** Cartões empilhados no topo da coluna, cada um na sua altura (sem esticar para igualar a vizinha). */
+    private static JPanel cardColumn(JComponent... cards) {
+        JPanel col = new JPanel(new GridBagLayout());
+        col.setOpaque(false);
+        GridBagConstraints c = new GridBagConstraints();
+        c.gridx = 0; c.weightx = 1; c.fill = GridBagConstraints.HORIZONTAL;
+        c.anchor = GridBagConstraints.NORTH;
+        for (int i = 0; i < cards.length; i++) {
+            c.gridy = i;
+            c.insets = new Insets(i > 0 ? 12 : 0, 0, 0, 0);
+            col.add(cards[i], c);
+        }
+        c.gridy = cards.length; c.weighty = 1; c.insets = new Insets(0, 0, 0, 0);
+        col.add(Box.createGlue(), c);   // sobra de altura vai para cá
+        return col;
+    }
+
+    // ── TELA SEMANA: a grade inteira, sempre à mão ─────────────────────────
+
+    private JComponent buildWeekScreen() {
+        weekScreen = new PlannerPanel(activeAreas(), areaColors(), weekPlan,
+                this::onPlanChanged, this::fillPlanFromGoals);
+        return weekScreen;
+    }
+
+    private List<String> activeAreas() {
+        List<String> areas = new ArrayList<>();
+        for (String s : studyDataMap.keySet()) if (!archived.contains(s)) areas.add(s);
+        return areas;
+    }
+
+    private Map<String, Color> areaColors() {
+        Map<String, Color> colorMap = new LinkedHashMap<>();
+        studyDataMap.forEach((k, v) -> colorMap.put(k, v.getColor()));
+        return colorMap;
+    }
+
+    // ── TELA ÁREAS: criar, editar, arquivar e deletar ──────────────────────
+    // Esses botões ficavam sempre à vista embaixo do cronômetro (com o "Deletar" vermelho a
+    // um clique). Aqui cada área tem os seus, e mexer numa área não troca a do cronômetro.
+
+    private JPanel buildAreasScreen() {
+        StyledButton add = new StyledButton("+ Área", StyledButton.Variant.FILLED);
+        add.addActionListener(e -> addNewSubject());
+        areasBody = new ScrollBody(null);
+        areasBody.setLayout(new BoxLayout(areasBody, BoxLayout.Y_AXIS));
+        areasBody.setBorder(new EmptyBorder(12, 16, 16, 16));
+
+        JPanel p = new JPanel(new BorderLayout());
+        p.setBackground(AppTheme.BG);
+        p.add(screenHeader("Áreas", "Suas áreas da vida, por tipo. O histórico de cada uma fica guardado.", add),
+                BorderLayout.NORTH);
+        p.add(quietScroll(areasBody), BorderLayout.CENTER);
+        return p;
+    }
+
+    private void refreshAreasScreen() {
+        if (areasBody == null) return;
+        areasBody.removeAll();
+        for (int t = 0; t < TYPE_KEYS.length; t++) {
+            List<String> doTipo = new ArrayList<>();
+            for (String s : studyDataMap.keySet())
+                if (!archived.contains(s) && typeOf(s).equals(TYPE_KEYS[t])) doTipo.add(s);
+            if (doTipo.isEmpty()) continue;
+            areasBody.add(areasSection(TYPE_LABELS[t]));
+            for (String s : doTipo) areasBody.add(areaRow(s, false));
+        }
+        if (!archived.isEmpty()) {
+            areasBody.add(areasSection("Arquivadas"));
+            for (String s : archived) if (studyDataMap.containsKey(s)) areasBody.add(areaRow(s, true));
+        }
+        areasBody.revalidate();
+        areasBody.repaint();
+    }
+
+    private JComponent areasSection(String label) {
+        JLabel l = new JLabel(label);
+        l.setFont(AppTheme.FONT_BOLD);
+        l.setForeground(AppTheme.TEXT_SEC);
+        l.setBorder(new EmptyBorder(areasBody.getComponentCount() == 0 ? 0 : 14, 4, 6, 0));
+        l.setAlignmentX(Component.LEFT_ALIGNMENT);
+        return l;
+    }
+
+    private JComponent areaRow(String area, boolean arquivada) {
+        StudyData sd = studyDataMap.get(area);
+        RoundedPanel row = new RoundedPanel(12, AppTheme.SURFACE);
+        row.setLayout(new GridBagLayout());   // nome e botões centralizados na mesma linha
+        row.setBorder(new EmptyBorder(4, 12, 4, 8));
+        row.setAlignmentX(Component.LEFT_ALIGNMENT);
+        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 46));
+
+        JLabel nome = new JLabel(area, PlannerPanel.dot(sd.getColor()), SwingConstants.LEFT);
+        nome.setIconTextGap(8);
+        nome.setFont(AppTheme.FONT_LABEL);
+        nome.setForeground(arquivada ? AppTheme.TEXT_SEC : AppTheme.TEXT_PRI);
+        JLabel total = new JLabel(fmtHM(sd.getMinutes()));
+        total.setFont(AppTheme.FONT_SMALL);
+        total.setForeground(AppTheme.TEXT_SEC);
+        JPanel left = new JPanel(new FlowLayout(FlowLayout.LEFT, 12, 0));
+        left.setOpaque(false);
+        left.add(nome); left.add(total);
+
+        JPanel btns = new JPanel(new FlowLayout(FlowLayout.RIGHT, 2, 0));
+        btns.setOpaque(false);
+        if (arquivada) {
+            btns.add(smallBtn("Reativar", StyledButton.Variant.TEXT, () -> unarchiveSubject(area)));
+        } else {
+            btns.add(smallBtn("Sub-focos", StyledButton.Variant.TEXT, () -> showSubFocosDialog(area)));
+            btns.add(smallBtn("Editar",   StyledButton.Variant.TEXT, () -> editSubjectName(area)));
+            btns.add(smallBtn("Cor",      StyledButton.Variant.TEXT, () -> changeSubjectColor(area)));
+            btns.add(smallBtn("Zerar",    StyledButton.Variant.TEXT, () -> zeroOutSubjectTime(area)));
+            btns.add(smallBtn("Arquivar", StyledButton.Variant.TEXT, () -> archiveSubject(area)));
+        }
+        btns.add(smallBtn("Deletar", StyledButton.Variant.TEXT, () -> deleteSubject(area)));
+
+        GridBagConstraints c = new GridBagConstraints();
+        c.gridy = 0; c.anchor = GridBagConstraints.WEST;
+        c.gridx = 0; c.weightx = 1; row.add(left, c);
+        c.gridx = 1; c.weightx = 0; row.add(btns, c);
+
+        JPanel wrap = new JPanel(new BorderLayout());   // espaço entre as linhas
+        wrap.setOpaque(false);
+        wrap.setBorder(new EmptyBorder(0, 0, 6, 0));
+        wrap.setAlignmentX(Component.LEFT_ALIGNMENT);
+        wrap.setMaximumSize(new Dimension(Integer.MAX_VALUE, 52));
+        wrap.add(row);
+        return wrap;
+    }
+
+    private static StyledButton smallBtn(String text, StyledButton.Variant v, Runnable r) {
+        StyledButton b = new StyledButton(text, v);
+        b.setFont(AppTheme.FONT_SMALL);
+        b.setBorder(BorderFactory.createEmptyBorder(4, 10, 4, 10));
+        b.addActionListener(e -> r.run());
+        return b;
+    }
+
+    // ── TELA PROGRESSO: donut, números e calendário ────────────────────────
+
+    private JPanel buildProgressScreen() {
+        StyledButton hist = new StyledButton("Histórico", StyledButton.Variant.TEXT);
+        hist.addActionListener(e -> showHistory());
+        StyledButton stats = new StyledButton("Estatísticas", StyledButton.Variant.TEXT);
+        stats.addActionListener(e -> new StatsPanel(this, sessions, studyDataMap).setVisible(true));
+
+        JPanel p = new JPanel(new BorderLayout());
+        p.setBackground(AppTheme.BG);
+        p.add(screenHeader("Progresso", null, hist, stats), BorderLayout.NORTH);
+        p.add(buildCenter(), BorderLayout.CENTER);
+        return p;
     }
 
     private JSplitPane buildCenter() {
@@ -370,21 +795,15 @@ public class StudyTracker extends JFrame {
         JPanel leftBottom = new JPanel();
         leftBottom.setLayout(new BoxLayout(leftBottom, BoxLayout.Y_AXIS));
         leftBottom.setOpaque(false);
-        // "Hoje" no topo: o plano do dia fica à vista em vez de escondido numa janela.
-        JComponent tc = buildTodayCard();    tc.setAlignmentX(Component.LEFT_ALIGNMENT);
-        JComponent nc = buildNowCard();      nc.setAlignmentX(Component.LEFT_ALIGNMENT);
-        JComponent bc = buildBalanceCard();  bc.setAlignmentX(Component.LEFT_ALIGNMENT);
-        JComponent gc = buildGoalsCard();    gc.setAlignmentX(Component.LEFT_ALIGNMENT);
+        // Visão de longo prazo: números do período, metas completas (dia/semana/mês) e equilíbrio.
         JComponent pc = buildProgressCard(); pc.setAlignmentX(Component.LEFT_ALIGNMENT);
-        leftBottom.add(tc);
-        leftBottom.add(Box.createVerticalStrut(12));
-        leftBottom.add(nc);
-        leftBottom.add(Box.createVerticalStrut(12));
-        leftBottom.add(bc);
+        JComponent gc = buildGoalsCard();    gc.setAlignmentX(Component.LEFT_ALIGNMENT);
+        JComponent bc = buildBalanceCard();  bc.setAlignmentX(Component.LEFT_ALIGNMENT);
+        leftBottom.add(pc);
         leftBottom.add(Box.createVerticalStrut(12));
         leftBottom.add(gc);
         leftBottom.add(Box.createVerticalStrut(12));
-        leftBottom.add(pc);
+        leftBottom.add(bc);
         leftBottom.add(Box.createVerticalGlue());
 
         JScrollPane progressScroll = new JScrollPane(leftBottom,
@@ -402,8 +821,8 @@ public class StudyTracker extends JFrame {
         progressHolder.add(progressScroll, BorderLayout.CENTER);
 
         JSplitPane leftSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT, chartCard, progressHolder);
-        leftSplit.setResizeWeight(0.46);   // gráfico em cima, metas+progresso embaixo (com scroll)
-        leftSplit.setDividerLocation(0.46);
+        leftSplit.setResizeWeight(0.36);   // gráfico em cima, progresso+metas+equilíbrio embaixo (com scroll)
+        leftSplit.setDividerLocation(0.36);
         leftSplit.setDividerSize(4);
         leftSplit.setBorder(null);
         leftSplit.setOpaque(false);
@@ -449,33 +868,33 @@ public class StudyTracker extends JFrame {
         outer.setBackground(AppTheme.BG);
         outer.setBorder(new EmptyBorder(0, 12, 12, 12));
 
+        // Compacto: o cronômetro parado não precisa de meia tela (a Hoje é sobre o que fazer).
         RoundedPanel card = new RoundedPanel(18, AppTheme.SURFACE);
-        card.setLayout(new BorderLayout(0, 8));
-        card.setBorder(new EmptyBorder(14, 16, 14, 16));
+        card.setLayout(new BorderLayout(0, 2));
+        card.setBorder(new EmptyBorder(10, 16, 8, 16));
 
         card.add(buildSubjectRow(), BorderLayout.NORTH);
 
         // Tabs customizadas (sem fundo branco do JTabbedPane)
         CustomTabs tabs = new CustomTabs();
         bottomTabs = tabs;
-        tabs.addTab("⏱  Cronômetro",       buildStopwatchTab());
-        tabs.addTab("✏  Manual",           buildManualTab());
-        tabs.addTab("🍅  Pomodoro",         buildPomodoroTab());
-        tabs.setPreferredSize(new Dimension(0, 175));
+        // Sem ⏱ ✏ 🍅: a fonte do Swing no Windows mostra esses glifos como quadrados.
+        tabs.addTab("Cronômetro", buildStopwatchTab());
+        tabs.addTab("Manual",     buildManualTab());
+        tabs.addTab("Pomodoro",   buildPomodoroTab());
+        tabs.setPreferredSize(new Dimension(0, 130));
         card.add(tabs, BorderLayout.CENTER);
-
-        card.add(buildManagementRow(), BorderLayout.SOUTH);
 
         outer.add(card);
         return outer;
     }
 
     private JPanel buildSubjectRow() {
-        // Duas linhas: [Matéria + Meta + barra de meta]  /  [Nota + Tipo]
+        // [Área + Meta + barra de meta]. Nota, sub-foco e energia são perguntados ao terminar.
         JPanel wrap = new JPanel();
         wrap.setLayout(new BoxLayout(wrap, BoxLayout.Y_AXIS));
         wrap.setOpaque(false);
-        wrap.setBorder(new EmptyBorder(0, 0, 8, 0));
+        wrap.setBorder(new EmptyBorder(0, 0, 4, 0));
 
         JPanel row = new JPanel(new BorderLayout(10, 0));
         row.setOpaque(false);
@@ -483,53 +902,19 @@ public class StudyTracker extends JFrame {
 
         JPanel left = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
         left.setOpaque(false);
-        JLabel lbl = new JLabel("Matéria:");
+        JLabel lbl = new JLabel("Área:");
         lbl.setFont(AppTheme.FONT_BOLD);
         lbl.setForeground(AppTheme.TEXT_PRI);
         subjectComboBox = new JComboBox<>();
         styleInput(subjectComboBox);
         subjectComboBox.setPreferredSize(new Dimension(220, 32));
-        subjectComboBox.addActionListener(e -> { updateGoalProgress(); refreshProgressCard(); refreshKindCombo(); });
+        subjectComboBox.addActionListener(e -> { pendingSubFoco = null; updateGoalProgress(); refreshProgressCard(); });
         left.add(lbl); left.add(subjectComboBox);
 
         StyledButton btnGoal = new StyledButton("Meta", StyledButton.Variant.TEXT);
         btnGoal.setFont(AppTheme.FONT_SMALL);
         btnGoal.addActionListener(e -> showGoalDialog());
         left.add(btnGoal);
-
-        // Linha 2: Nota + Tipo
-        JPanel noteRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
-        noteRow.setOpaque(false);
-        noteRow.setAlignmentX(Component.LEFT_ALIGNMENT);
-        noteRow.setBorder(new EmptyBorder(6, 0, 0, 0));
-        JLabel noteLbl = new JLabel("Nota:");
-        noteLbl.setFont(AppTheme.FONT_BOLD); noteLbl.setForeground(AppTheme.TEXT_PRI);
-        noteField = new JTextField(24);
-        styleInput(noteField);
-        noteField.setToolTipText("Opcional: o que você estudou nesta sessão (vai para o Histórico)");
-        JLabel kindLbl = new JLabel("Tipo:");
-        kindLbl.setFont(AppTheme.FONT_BOLD); kindLbl.setForeground(AppTheme.TEXT_PRI);
-        kindCombo = new JComboBox<>();
-        styleInput(kindCombo);
-        kindCombo.setToolTipText("Sub-foco desta sessão (tópico / grupo muscular / hobby)");
-        kindCombo.addActionListener(e -> {
-            if (KIND_MANAGE.equals(kindCombo.getSelectedItem())) {
-                String a = (String) subjectComboBox.getSelectedItem();
-                if (a != null) showSubFocosDialog(a);
-                kindCombo.setSelectedIndex(0);
-            }
-        });
-        kindLbl.setText("Sub-foco:");
-        JLabel enLbl = new JLabel("Energia:");
-        enLbl.setFont(AppTheme.FONT_BOLD); enLbl.setForeground(AppTheme.TEXT_PRI);
-        energyCombo = new JComboBox<>(ENERGY_LABELS);
-        styleInput(energyCombo);
-        energyCombo.setToolTipText("Como estava sua energia nesta sessão");
-        noteRow.add(noteLbl); noteRow.add(noteField);
-        noteRow.add(Box.createHorizontalStrut(6));
-        noteRow.add(kindLbl); noteRow.add(kindCombo);
-        noteRow.add(Box.createHorizontalStrut(6));
-        noteRow.add(enLbl); noteRow.add(energyCombo);
 
         // Barra de meta (oculta por padrão)
         goalBar = new JPanel(new BorderLayout(8, 0));
@@ -554,23 +939,25 @@ public class StudyTracker extends JFrame {
         row.add(goalBar, BorderLayout.CENTER);
 
         wrap.add(row);
-        wrap.add(noteRow);
         return wrap;
     }
 
     // ── CARTÃO DE PROGRESSO ──────────────────────────────────────────────────
 
-    /** Cartão "Metas" — visão rápida das metas de todas as matérias. */
-    /** Cartão "Agora" — uma sugestão só + botão Começar. */
+    /** Cartão "Agora": a protagonista da tela. Uma sugestão só, grande, com 1 clique para começar. */
+    private JLabel nowReason;
+    private final java.util.Set<String> skippedNow = new java.util.HashSet<>();   // "Outra coisa" neste turno
+
     private JComponent buildNowCard() {
         nowCard = new RoundedPanel(18, AppTheme.SURFACE);
-        nowCard.setLayout(new BorderLayout(0, 8));
-        nowCard.setBorder(new EmptyBorder(14, 16, 14, 16));
-        JLabel title = new JLabel("Agora");
-        title.setFont(AppTheme.FONT_SECTION);
-        title.setForeground(AppTheme.TEXT_PRI);
-        nowCard.add(title, BorderLayout.NORTH);
-        nowBody = new JPanel(new BorderLayout(10, 0));
+        nowCard.setBorderColor(AppTheme.ACCENT, 2f);
+        nowCard.setLayout(new BorderLayout(0, 6));
+        nowCard.setBorder(new EmptyBorder(14, 18, 12, 18));
+        nowReason = new JLabel("Agora");
+        nowReason.setFont(AppTheme.FONT_SMALL);
+        nowReason.setForeground(AppTheme.ACCENT);
+        nowCard.add(nowReason, BorderLayout.NORTH);
+        nowBody = new JPanel(new BorderLayout(14, 0));
         nowBody.setOpaque(false);
         nowCard.add(nowBody, BorderLayout.CENTER);
         return nowCard;
@@ -581,84 +968,166 @@ public class StudyTracker extends JFrame {
         nowBody.removeAll();
         LocalDate hoje = LocalDate.now();
 
+        // Sessão contando: o "agora" é ela, não uma sugestão nova.
+        if (sessionInProgress()) {
+            boolean pausaPomo = pomodoroActive() && !wasFocusSession;
+            String area = (String) subjectComboBox.getSelectedItem();
+            StudyData sd = area == null ? null : studyDataMap.get(area);
+            nowReason.setText(pausaPomo ? "Agora · pausa do Pomodoro" : "Agora · em andamento");
+            JLabel nm = new JLabel(pausaPomo ? "Pausa" : area,
+                    bigDot(sd != null && !pausaPomo ? sd.getColor() : AppTheme.ACCENT), SwingConstants.LEFT);
+            nm.setIconTextGap(10);
+            nm.setFont(AppTheme.FONT_TITLE);
+            nm.setForeground(AppTheme.TEXT_PRI);
+            StyledButton foco = new StyledButton("Modo foco", StyledButton.Variant.FILLED);
+            foco.setFont(AppTheme.FONT_BOLD);
+            foco.setBorder(BorderFactory.createEmptyBorder(8, 22, 8, 22));
+            foco.setToolTipText("Recolhe a janela numa faixa pequena com o tempo");
+            foco.addActionListener(e -> enterFocusMode(true));
+            JPanel goWrap = new JPanel(new GridBagLayout());
+            goWrap.setOpaque(false);
+            goWrap.add(foco);
+            nowBody.add(nm,     BorderLayout.CENTER);
+            nowBody.add(goWrap, BorderLayout.EAST);
+            nowBody.revalidate(); nowBody.repaint();
+            return;
+        }
+
         if (isHardDay(hoje)) {
-            JPanel p = new JPanel();
-            p.setLayout(new BoxLayout(p, BoxLayout.Y_AXIS));
-            p.setOpaque(false);
-            JLabel l = new JLabel("😮‍💨 Dia difícil — sem cobrança hoje.");
+            nowReason.setText("Agora · dia difícil");
+            JLabel l = new JLabel("Sem cobrança hoje. Se der vontade, qualquer minuto conta.");
             l.setFont(AppTheme.FONT_LABEL); l.setForeground(AppTheme.TEXT_SEC);
-            l.setAlignmentX(Component.LEFT_ALIGNMENT);
-            StyledButton undo = new StyledButton("desfazer", StyledButton.Variant.TEXT);
-            undo.setFont(AppTheme.FONT_SMALL);
-            undo.setAlignmentX(Component.LEFT_ALIGNMENT);
-            undo.addActionListener(e -> { hardDays.remove(hoje.toString()); updateUI(); });
-            p.add(l); p.add(undo);
-            nowBody.add(p, BorderLayout.CENTER);
+            nowBody.add(l, BorderLayout.CENTER);
+            nowBody.add(nowLinks(textBtn("desfazer", () -> { hardDays.remove(hoje.toString()); updateUI(); })),
+                    BorderLayout.SOUTH);
             nowBody.revalidate(); nowBody.repaint();
             return;
         }
 
         String[] sug = nextSuggestion();
-        JPanel south = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
-        south.setOpaque(false);
-        StyledButton hard = new StyledButton("hoje tá difícil?", StyledButton.Variant.TEXT);
-        hard.setFont(AppTheme.FONT_SMALL);
-        hard.addActionListener(e -> {
+        if (sug == null && !skippedNow.isEmpty()) { skippedNow.clear(); sug = nextSuggestion(); }   // deu a volta
+        StyledButton hard = textBtn("hoje tá difícil?", () -> {
             hardDays.add(hoje.toString());
             updateUI();
-            toast("Ok, hoje não cobra. Descansa. 🫶");
+            toast("Ok, hoje não cobra. Descansa.");
         });
-        south.add(hard);
-        nowBody.add(south, BorderLayout.SOUTH);
 
         if (sug == null) {
-            JLabel l = new JLabel("Tudo em dia por aqui. 🎉");
+            nowReason.setText("Agora");
+            JLabel l = new JLabel("Tudo em dia por aqui. Aproveite o descanso.");
             l.setFont(AppTheme.FONT_LABEL); l.setForeground(AppTheme.TEXT_SEC);
             nowBody.add(l, BorderLayout.CENTER);
+            nowBody.add(nowLinks(hard), BorderLayout.SOUTH);
         } else {
+            final String area = sug[0];
+            final String sf = sug.length > 2 ? sug[2] : null;
+            nowReason.setText("Agora · " + sug[1]);
+
+            StudyData sd = studyDataMap.get(area);
+            JLabel nm = new JLabel(sf != null ? area + " · " + sf : area,
+                    bigDot(sd != null ? sd.getColor() : AppTheme.ACCENT), SwingConstants.LEFT);
+            nm.setIconTextGap(10);
+            nm.setFont(AppTheme.FONT_TITLE);
+            nm.setForeground(AppTheme.TEXT_PRI);
+            nm.setAlignmentX(Component.LEFT_ALIGNMENT);
+
             JPanel txt = new JPanel();
             txt.setLayout(new BoxLayout(txt, BoxLayout.Y_AXIS));
             txt.setOpaque(false);
-            JLabel nm = new JLabel(typeIcon(typeOf(sug[0])) + "  " + sug[0]);
-            nm.setFont(AppTheme.FONT_BOLD); nm.setForeground(AppTheme.TEXT_PRI);
-            nm.setAlignmentX(Component.LEFT_ALIGNMENT);
-            JLabel rs = new JLabel(sug[1]);
-            rs.setFont(AppTheme.FONT_SMALL); rs.setForeground(AppTheme.TEXT_SEC);
-            rs.setAlignmentX(Component.LEFT_ALIGNMENT);
-            txt.add(nm); txt.add(Box.createVerticalStrut(2)); txt.add(rs);
+            txt.add(nm);
+            // O motivo já fala da meta? Então não repete o progresso embaixo.
+            String prog = sug[1].contains("meta") ? null : nowProgressText(area, hoje);
+            if (prog != null) {
+                JLabel p = new JLabel(prog);
+                p.setFont(AppTheme.FONT_SMALL); p.setForeground(AppTheme.TEXT_SEC);
+                p.setBorder(new EmptyBorder(2, 24, 0, 0));
+                p.setAlignmentX(Component.LEFT_ALIGNMENT);
+                txt.add(p);
+            }
 
-            StyledButton go = new StyledButton("▶ Começar", StyledButton.Variant.FILLED);
-            go.setFont(AppTheme.FONT_SMALL);
-            final String area = sug[0];
-            final String sf = sug.length > 2 ? sug[2] : null;
+            StyledButton go = new StyledButton("Começar", StyledButton.Variant.FILLED);
+            go.setFont(AppTheme.FONT_BOLD);
+            go.setBorder(BorderFactory.createEmptyBorder(8, 26, 8, 26));
             go.addActionListener(e -> startArea(area, sf));
-            nowBody.add(txt, BorderLayout.CENTER);
-            nowBody.add(go,  BorderLayout.EAST);
+            JPanel goWrap = new JPanel(new GridBagLayout());   // centralizado na altura, sem esticar
+            goWrap.setOpaque(false);
+            goWrap.add(go);
+
+            StyledButton outra = textBtn("Outra coisa", () -> { skippedNow.add(area); refreshNowCard(); });
+            outra.setToolTipText("Mostrar outra sugestão");
+            nowBody.add(txt,    BorderLayout.CENTER);
+            nowBody.add(goWrap, BorderLayout.EAST);
+            nowBody.add(nowLinks(outra, hard), BorderLayout.SOUTH);
         }
         nowBody.revalidate();
         nowBody.repaint();
     }
 
+    /** "40 de 90 min hoje" (ou "mínimo de hoje feito"); null se a área não tem meta hoje. */
+    private String nowProgressText(String area, LocalDate hoje) {
+        int ideal = goals.getOrDefault(area, 0);
+        if (ideal <= 0 || !isGoalDay(area, hoje)) return null;
+        int feito = minutesOnDay(area, hoje);
+        if (feito <= 0) return "meta de hoje: " + fmtHM(ideal);
+        if (feito >= dailyMinFor(area)) return "mínimo de hoje feito · " + fmtHM(feito) + " de " + fmtHM(ideal);
+        return fmtHM(feito) + " de " + fmtHM(ideal) + " hoje";
+    }
+
+    private JPanel nowLinks(JComponent... links) {
+        JPanel p = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+        p.setOpaque(false);
+        p.setBorder(new EmptyBorder(4, 14, 0, 0));
+        for (JComponent l : links) p.add(l);
+        return p;
+    }
+
+    private static StyledButton textBtn(String text, Runnable r) {
+        StyledButton b = new StyledButton(text, StyledButton.Variant.TEXT);
+        b.setFont(AppTheme.FONT_SMALL);
+        b.setBorder(BorderFactory.createEmptyBorder(4, 10, 4, 10));
+        b.addActionListener(e -> r.run());
+        return b;
+    }
+
+    private static Icon bigDot(Color c) {
+        return new Icon() {
+            public int getIconWidth()  { return 14; }
+            public int getIconHeight() { return 14; }
+            public void paintIcon(Component comp, Graphics g, int x, int y) {
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                g2.setColor(c); g2.fillOval(x, y, 14, 14); g2.dispose();
+            }
+        };
+    }
+
     /** Seleciona a área (e o sub-foco), vai para a aba Cronômetro e liga o cronômetro: 1 clique. */
     private void startArea(String area, String subFoco) {
-        subjectComboBox.setSelectedItem(area);        // dispara refreshKindCombo
-        if (subFoco != null && kindCombo != null) kindCombo.setSelectedItem(subFoco);
+        // Com uma sessão contando, trocar a área mandaria o tempo já feito para a área nova.
+        if (sessionInProgress() && !area.equals(subjectComboBox.getSelectedItem())) {
+            showScreen(SCR_HOJE);
+            toast("Termine ou zere a sessão de \"" + subjectComboBox.getSelectedItem() + "\" antes.");
+            return;
+        }
+        subjectComboBox.setSelectedItem(area);
+        pendingSubFoco = subFoco;                      // depois do combo (o listener dele limpa)
+        showScreen(SCR_HOJE);                           // o cronômetro fica na tela Hoje
         if (bottomTabs != null) bottomTabs.select(0);   // aba Cronômetro
         startStopwatch();
     }
 
-    /** {área, motivo} da coisa mais relevante pra fazer agora, ou null. */
+    /** {área, motivo} da coisa mais relevante pra fazer agora, ou null. Pula o que foi descartado com "Outra coisa". */
     private String[] nextSuggestion() {
         LocalDate today = LocalDate.now();
         // 0. o que a pessoa já planejou para este turno: a decisão já foi tomada, é só seguir
         int turno = PlannerPanel.slotAt(LocalTime.now());
         for (String a : plannedAreas(today.getDayOfWeek().getValue(), turno))
-            if (!isDoneToday(a)) return new String[]{a, "está no seu plano " + PlannerPanel.SLOT_PHRASE[turno]};
+            if (!isDoneToday(a) && !skippedNow.contains(a)) return new String[]{a, "está no seu plano " + PlannerPanel.SLOT_PHRASE[turno]};
 
         // 1. meta diária de hoje não batida (prioriza prova mais próxima e o que falta)
         String best = null; long bestScore = Long.MIN_VALUE; String reason = null;
         for (String s : studyDataMap.keySet()) {
-            if (archived.contains(s)) continue;
+            if (archived.contains(s) || skippedNow.contains(s)) continue;
             int goal = goals.getOrDefault(s, 0);
             if (goal <= 0 || !isGoalDay(s, today)) continue;
             int done = minutesOnDay(s, today);
@@ -680,7 +1149,7 @@ public class StudyTracker extends JFrame {
         // 1b. rodízio: área de Físico com grupo (sub-foco) parado há mais tempo
         String rArea = null, rSf = null; long oldestSf = Long.MAX_VALUE;
         for (String s : studyDataMap.keySet()) {
-            if (archived.contains(s) || !"fisico".equals(typeOf(s))) continue;
+            if (archived.contains(s) || skippedNow.contains(s) || !"fisico".equals(typeOf(s))) continue;
             for (String grupo : subFocos.getOrDefault(s, java.util.Collections.emptyList())) {
                 long last = 0;
                 for (StudySession se : sessions)
@@ -704,14 +1173,14 @@ public class StudyTracker extends JFrame {
             if (typeGoalWeek.getOrDefault(t, 0) <= 0) continue;
             if (minutesByTypeInRange(t, ws, today) > 0) continue;
             for (String s : studyDataMap.keySet())
-                if (!archived.contains(s) && typeOf(s).equals(t))
+                if (!archived.contains(s) && !skippedNow.contains(s) && typeOf(s).equals(t))
                     return new String[]{s, "sua semana está sem " + typeLabel(t).toLowerCase()};
         }
 
         // 3. área sem atividade há mais tempo
         String stale = null; long oldest = Long.MAX_VALUE;
         for (String s : studyDataMap.keySet()) {
-            if (archived.contains(s)) continue;
+            if (archived.contains(s) || skippedNow.contains(s)) continue;
             long last = 0;
             for (StudySession se : sessions) if (se.getSubject().equals(s)) last = Math.max(last, se.getTimestamp());
             if (last < oldest) { oldest = last; stale = s; }
@@ -787,7 +1256,7 @@ public class StudyTracker extends JFrame {
         row.setAlignmentX(Component.LEFT_ALIGNMENT);
         row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 22));
 
-        JLabel name = new JLabel(typeIcon(type) + " " + typeLabel(type));
+        JLabel name = new JLabel(typeLabel(type));
         name.setFont(AppTheme.FONT_SMALL);
         name.setForeground(AppTheme.TEXT_SEC);
         name.setPreferredSize(new Dimension(96, 16));
@@ -840,7 +1309,7 @@ public class StudyTracker extends JFrame {
             int v = typeGoalWeek.getOrDefault(TYPE_KEYS[i], 0);
             fs[i] = new JTextField(v > 0 ? String.valueOf(v) : "", 6);
             fs[i].setFont(AppTheme.FONT_LABEL);
-            addFormRow(panel, c, i + 1, TYPE_ICONS[i] + "  " + TYPE_LABELS[i] + ":", fs[i]);
+            addFormRow(panel, c, i + 1, TYPE_LABELS[i] + ":", fs[i]);
         }
 
         int r = JOptionPane.showConfirmDialog(this, panel, "Metas de equilíbrio (semana)",
@@ -877,7 +1346,7 @@ public class StudyTracker extends JFrame {
         if (faltando.isEmpty()) return;
         balanceNudgeWeek = semana;   // persistido no saveData() do updateUI
         Timer tt = new Timer(600, e -> toast("Sua semana está sem " + String.join(" e ", faltando)
-                + ". Que tal um pouco hoje? 🙂"));
+                + ". Que tal um pouco hoje?"));
         tt.setRepeats(false); tt.start();
     }
 
@@ -1047,29 +1516,21 @@ public class StudyTracker extends JFrame {
     }
 
     // ── Semana planejada + cartão "Hoje" ─────────────────────────────────────
-    // O plano do dia fica na tela principal (externalizar o "o que vem agora"); a grade da
-    // semana inteira é só para editar, aberta pelo "editar semana" do cartão.
+    // O plano do dia fica na tela Hoje (externalizar o "o que vem agora"); a grade da
+    // semana inteira é a tela Semana, aberta pela barra lateral ou pelo "editar semana".
 
-    private PlannerPanel plannerWindow;
     private JPanel  todayBody;
     private JLabel  todayTitle;
     private String  todayShownKey;   // "<data>_<turno>" desenhado: o timer só redesenha quando muda
     private Timer   todayTimer;
 
     private void openPlanner() {
-        // Sempre recria: a janela guarda a lista e as cores das áreas de quando foi aberta.
-        if (plannerWindow != null) plannerWindow.dispose();
-        List<String> areas = new ArrayList<>();
-        for (String s : studyDataMap.keySet()) if (!archived.contains(s)) areas.add(s);
-        Map<String, Color> colorMap = new LinkedHashMap<>();
-        studyDataMap.forEach((k, v) -> colorMap.put(k, v.getColor()));
-        plannerWindow = new PlannerPanel(this, areas, colorMap, weekPlan,
-                this::onPlanChanged, this::fillPlanFromGoals);
-        plannerWindow.setVisible(true);
+        showScreen(SCR_SEMANA);
     }
 
     private void onPlanChanged() {
         saveData();
+        if (weekScreen != null) weekScreen.rebuild();   // a mudança pode vir do cartão Hoje
         refreshTodayCard();
         refreshNowCard();
     }
@@ -1099,10 +1560,9 @@ public class StudyTracker extends JFrame {
      * (mantém tudo) ou recomeça do zero pelas metas (útil quando os dias da meta mudaram).
      */
     private void fillPlanFromGoals() {
-        Component parent = plannerWindow != null && plannerWindow.isVisible() ? plannerWindow : this;
         if (!weekPlan.isEmpty()) {
             Object[] opts = {"Completar", "Refazer do zero", "Cancelar"};
-            int r = JOptionPane.showOptionDialog(parent,
+            int r = JOptionPane.showOptionDialog(this,
                     "Sua semana já tem áreas.\n\n"
                   + "Completar: mantém o que está lá e só adiciona o que falta pelas metas.\n"
                   + "Refazer do zero: apaga a semana e monta de novo só pelas metas.",
@@ -1175,14 +1635,10 @@ public class StudyTracker extends JFrame {
         card.setBorder(new EmptyBorder(14, 16, 14, 16));
         JPanel head = new JPanel(new BorderLayout());
         head.setOpaque(false);
-        todayTitle = new JLabel("Hoje");
+        todayTitle = new JLabel("Turnos de hoje");
         todayTitle.setFont(AppTheme.FONT_SECTION);
         todayTitle.setForeground(AppTheme.TEXT_PRI);
-        StyledButton edit = new StyledButton("editar semana", StyledButton.Variant.TEXT);
-        edit.setFont(AppTheme.FONT_SMALL);
-        edit.addActionListener(e -> openPlanner());
         head.add(todayTitle, BorderLayout.WEST);
-        head.add(edit, BorderLayout.EAST);
         card.add(head, BorderLayout.NORTH);
         todayBody = new JPanel();
         todayBody.setLayout(new BoxLayout(todayBody, BoxLayout.Y_AXIS));
@@ -1198,7 +1654,9 @@ public class StudyTracker extends JFrame {
         int dow = hoje.getDayOfWeek().getValue();
         int agora = PlannerPanel.slotAt(LocalTime.now());
         todayShownKey = hoje + "_" + agora;
-        todayTitle.setText("Hoje · " + PlannerPanel.DOW_LONG[dow - 1]);
+        refreshTodayHeader();
+        refreshTodayGoalsCard();
+        refreshWeekStrip();
 
         boolean vazio = true;
         for (int s = 0; s < 3; s++) if (!plannedAreas(dow, s).isEmpty()) vazio = false;
@@ -1242,27 +1700,13 @@ public class StudyTracker extends JFrame {
 
         JPanel chips = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 2));
         chips.setOpaque(false);
-        String proxima = null;
         if (areas.isEmpty()) {
             JLabel l = new JLabel("livre");
             l.setFont(AppTheme.FONT_SMALL); l.setForeground(AppTheme.TEXT_MUT);
             chips.add(l);
         }
-        for (String a : areas) {
-            boolean feito = isDoneToday(a);
-            if (!feito && proxima == null) proxima = a;
-            chips.add(todayChip(a, feito, passou));
-        }
+        for (String a : areas) chips.add(todayChip(a, isDoneToday(a), passou));
         row.add(chips, BorderLayout.CENTER);
-
-        if (atual && proxima != null) {
-            StyledButton go = new StyledButton("Começar", StyledButton.Variant.FILLED);
-            go.setFont(AppTheme.FONT_SMALL);
-            go.setToolTipText("Começar " + proxima + " agora");
-            final String area = proxima;
-            go.addActionListener(e -> startArea(area, null));
-            row.add(go, BorderLayout.EAST);
-        }
         return row;
     }
 
@@ -1292,7 +1736,7 @@ public class StudyTracker extends JFrame {
         if (todayTimer != null) return;
         todayTimer = new Timer(60_000, e -> {
             String k = LocalDate.now() + "_" + PlannerPanel.slotAt(LocalTime.now());
-            if (!k.equals(todayShownKey)) { refreshTodayCard(); refreshNowCard(); }
+            if (!k.equals(todayShownKey)) { skippedNow.clear(); refreshTodayCard(); refreshNowCard(); }
         });
         todayTimer.start();
     }
@@ -1423,14 +1867,14 @@ public class StudyTracker extends JFrame {
         long dias = java.time.temporal.ChronoUnit.DAYS.between(today, exam);
         String quando = exam.format(java.time.format.DateTimeFormatter.ofPattern("dd/MM"));
         if (dias < 0) {
-            l.setText("📅 prova de " + subject + " foi em " + quando);
+            l.setText("Prova de " + subject + " foi em " + quando);
             l.setForeground(AppTheme.TEXT_SEC);
         } else {
             int daily = dailyGoalFor(subject);
             int agendadosRestantes = 0;
             for (LocalDate d = today.plusDays(1); !d.isAfter(exam); d = d.plusDays(1))
                 if (isGoalDay(subject, d)) agendadosRestantes++;
-            String base = "📅 prova em " + (dias == 0 ? "HOJE" : dias + (dias == 1 ? " dia" : " dias"))
+            String base = "Prova em " + (dias == 0 ? "HOJE" : dias + (dias == 1 ? " dia" : " dias"))
                         + " (" + quando + ")";
             if (daily > 0 && dias > 0)
                 base += "  ·  no ritmo da meta: ~" + fmtHM(daily * agendadosRestantes) + " até lá";
@@ -1438,7 +1882,7 @@ public class StudyTracker extends JFrame {
             for (ChecklistItem it : checklist)
                 if (it.subject.equals(subject)) { total++; if (it.done) feitos++; }
             if (total > 0)
-                base += "  ·  plano " + feitos + "/" + total + (feitos == total ? " ✓" : "");
+                base += "  ·  plano " + feitos + "/" + total + (feitos == total ? " · tudo feito" : "");
             l.setText(base);
             l.setForeground(dias <= 3 ? AppTheme.WARNING : AppTheme.ACCENT);
         }
@@ -1481,7 +1925,7 @@ public class StudyTracker extends JFrame {
             l.setForeground(AppTheme.TEXT_SEC);
         } else {
             boolean metToday = minutesOnDay(subject, LocalDate.now()) >= goal;
-            String txt = "🔥 " + streak + (streak == 1 ? " dia" : " dias") + streakBadge(streak)
+            String txt = "Sequência: " + streak + (streak == 1 ? " dia" : " dias") + streakBadge(streak)
                        + "   ·   recorde " + best;
             if (!metToday) txt += "   (estude hoje para manter)";
             l.setText(txt);
@@ -1521,7 +1965,7 @@ public class StudyTracker extends JFrame {
             boolean met = current >= goal;
             int pct = (int) Math.min(100, frac * 100.0);
             bar.set(frac, base, met);
-            val.setText(fmtHM(current) + " / " + fmtHM(goal) + "   " + (met ? "✓ " : "") + pct + "%");
+            val.setText(fmtHM(current) + " / " + fmtHM(goal) + "   " + (met ? "feito · " : "") + pct + "%");
             val.setForeground(met ? AppTheme.SUCCESS : AppTheme.TEXT_PRI);
         }
 
@@ -1560,7 +2004,6 @@ public class StudyTracker extends JFrame {
         return 0;
     }
     private static String typeLabel(String key) { return TYPE_LABELS[typeIndex(key)]; }
-    private static String typeIcon(String key)  { return TYPE_ICONS[typeIndex(key)]; }
     private static Color typeColor(String key) {
         switch (key) {
             case "fisico":   return new Color(0x66BB6A);
@@ -1643,29 +2086,6 @@ public class StudyTracker extends JFrame {
         return daily > 0 ? daily * scheduledDaysInMonth(subject, LocalDate.now()) : 0;
     }
 
-    private JPanel buildManagementRow() {
-        JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
-        row.setOpaque(false);
-        row.setBorder(new EmptyBorder(8, 0, 0, 0));
-
-        StyledButton btnAdd    = new StyledButton("+ Área",  StyledButton.Variant.TONAL);
-        StyledButton btnEdit   = new StyledButton("Editar área",   StyledButton.Variant.OUTLINED);
-        StyledButton btnColor  = new StyledButton("Cor",        StyledButton.Variant.OUTLINED);
-        StyledButton btnZero   = new StyledButton("Zerar matéria", StyledButton.Variant.OUTLINED);
-        StyledButton btnArch   = new StyledButton("Arquivar",   StyledButton.Variant.OUTLINED);
-        StyledButton btnDelete = new StyledButton("Deletar",    StyledButton.Variant.DANGER);
-
-        btnAdd.addActionListener(e    -> addNewSubject());
-        btnEdit.addActionListener(e   -> editSubjectName());
-        btnColor.addActionListener(e  -> changeSubjectColor());
-        btnZero.addActionListener(e   -> zeroOutSubjectTime());
-        btnArch.addActionListener(e   -> archiveSubject());
-        btnDelete.addActionListener(e -> deleteSubject());
-
-        for (StyledButton b : new StyledButton[]{btnAdd, btnEdit, btnColor, btnZero, btnArch, btnDelete}) row.add(b);
-        return row;
-    }
-
     // ── TABS ────────────────────────────────────────────────────────────────
 
     private JPanel buildStopwatchTab() {
@@ -1675,17 +2095,17 @@ public class StudyTracker extends JFrame {
         JPanel head = new JPanel();
         head.setLayout(new BoxLayout(head, BoxLayout.Y_AXIS));
         head.setOpaque(false);
-        head.setBorder(new EmptyBorder(10, 0, 0, 0));
+        head.setBorder(new EmptyBorder(0, 6, 0, 0));
 
-        stopwatchLabel = new JLabel("00:00:00", SwingConstants.CENTER);
+        stopwatchLabel = new JLabel("00:00:00", SwingConstants.LEFT);
         stopwatchLabel.setFont(AppTheme.FONT_MONO_S);
         stopwatchLabel.setForeground(AppTheme.TEXT_PRI);
-        stopwatchLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
+        stopwatchLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
 
-        stopwatchInfoLabel = new JLabel(" ", SwingConstants.CENTER);
+        stopwatchInfoLabel = new JLabel(" ", SwingConstants.LEFT);
         stopwatchInfoLabel.setFont(AppTheme.FONT_SMALL);
         stopwatchInfoLabel.setForeground(AppTheme.TEXT_SEC);
-        stopwatchInfoLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
+        stopwatchInfoLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
 
         head.add(stopwatchLabel);
         head.add(stopwatchInfoLabel);
@@ -1700,18 +2120,21 @@ public class StudyTracker extends JFrame {
         resetStopwatchButton.addActionListener(e -> resetStopwatch());
         submitButton.addActionListener(e -> submitStopwatchTime());
 
-        JPanel btns = new JPanel(new FlowLayout(FlowLayout.CENTER, 8, 8));
+        JPanel btns = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
         btns.setOpaque(false);
         btns.add(startButton); btns.add(stopButton);
         btns.add(resetStopwatchButton); btns.add(submitButton);
 
-        p.add(head, BorderLayout.CENTER);
-        p.add(btns, BorderLayout.SOUTH);
+        JPanel line = new JPanel(new BorderLayout(12, 0));
+        line.setOpaque(false);
+        line.add(head, BorderLayout.WEST);
+        line.add(btns, BorderLayout.EAST);
+        p.add(line, BorderLayout.NORTH);
         return p;
     }
 
     private JPanel buildManualTab() {
-        JPanel p = new JPanel(new FlowLayout(FlowLayout.CENTER, 10, 18));
+        JPanel p = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 6));
         p.setBackground(AppTheme.SURFACE);
         hoursField   = styledField("Horas");
         minutesField = styledField("Minutos");
@@ -1730,7 +2153,7 @@ public class StudyTracker extends JFrame {
         JPanel p = new JPanel(new BorderLayout(0, 0));
         p.setBackground(AppTheme.SURFACE);
 
-        JPanel top = new JPanel(new FlowLayout(FlowLayout.CENTER, 12, 6));
+        JPanel top = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 0));
         top.setBackground(AppTheme.SURFACE);
         focusSpinner = new JSpinner(new SpinnerNumberModel(25, 1, 120, 1));
         breakSpinner = new JSpinner(new SpinnerNumberModel(5,  1,  60, 1));
@@ -1763,7 +2186,7 @@ public class StudyTracker extends JFrame {
         statusLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
 
         countdownLabel = new JLabel("25:00", SwingConstants.CENTER);
-        countdownLabel.setFont(AppTheme.FONT_TIMER_S);
+        countdownLabel.setFont(AppTheme.FONT_MONO_S);
         countdownLabel.setForeground(AppTheme.TEXT_PRI);
         countdownLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
 
@@ -1773,20 +2196,20 @@ public class StudyTracker extends JFrame {
         pomoCountLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
 
         // Foco: inicia sessão de foco
-        startFocusButton    = new StyledButton("▶ Foco",   StyledButton.Variant.FILLED);
+        startFocusButton    = new StyledButton("Foco",   StyledButton.Variant.FILLED);
         // Descanso: inicia pausa/descanso
-        startBreakButton    = new StyledButton("☕ Descanso", StyledButton.Variant.TONAL);
+        startBreakButton    = new StyledButton("Descanso", StyledButton.Variant.TONAL);
         // Pausar/Retomar: pausa e retoma o timer atual
-        stopCountdownButton = new StyledButton("⏸ Pausar", StyledButton.Variant.OUTLINED);
+        stopCountdownButton = new StyledButton("Pausar", StyledButton.Variant.OUTLINED);
         // Resetar: cancela tudo
-        resetButton         = new StyledButton("↺ Resetar", StyledButton.Variant.TEXT);
+        resetButton         = new StyledButton("Resetar", StyledButton.Variant.TEXT);
 
         stopCountdownButton.setEnabled(false);
         resetButton.setEnabled(false);
         // Descanso sempre disponível, não depende de ter rodado Foco antes
         startBreakButton.setEnabled(true);
 
-        startFocusButton.addActionListener(e    -> startCountdown(true));
+        startFocusButton.addActionListener(e    -> { startCountdown(true); enterFocusMode(false); });
         startBreakButton.addActionListener(e    -> startCountdown(false));
         stopCountdownButton.addActionListener(e -> togglePauseCountdown());
         resetButton.addActionListener(e         -> stopCountdown(false));
@@ -1799,15 +2222,23 @@ public class StudyTracker extends JFrame {
         buttons.add(resetButton);
         buttons.setAlignmentX(Component.CENTER_ALIGNMENT);
 
-        mid.add(Box.createVerticalStrut(2));
-        mid.add(statusLabel);
+        statusLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        countdownLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        countdownLabel.setHorizontalAlignment(SwingConstants.LEFT);
+        pomoCountLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+        mid.setBorder(new EmptyBorder(0, 6, 0, 0));
         mid.add(countdownLabel);
+        mid.add(statusLabel);
         mid.add(pomoCountLabel);
-        mid.add(Box.createVerticalStrut(4));
-        mid.add(buttons);
+        buttons.setLayout(new FlowLayout(FlowLayout.RIGHT, 8, 0));
 
-        p.add(top,    BorderLayout.NORTH);
-        p.add(mid,    BorderLayout.CENTER);
+        JPanel line = new JPanel(new BorderLayout(12, 0));
+        line.setOpaque(false);
+        line.setBorder(new EmptyBorder(6, 0, 0, 0));
+        line.add(mid,     BorderLayout.WEST);
+        line.add(buttons, BorderLayout.EAST);
+        p.add(top,  BorderLayout.NORTH);
+        p.add(line, BorderLayout.CENTER);
         updatePomodoroCount();
         return p;
     }
@@ -1819,7 +2250,7 @@ public class StudyTracker extends JFrame {
         int n = 0;
         for (StudySession s : sessions)
             if ("pomodoro".equals(s.getType()) && dateOf(s.getTimestamp()).equals(today)) n++;
-        pomoCountLabel.setText(n == 0 ? "" : "🍅  " + n + (n == 1 ? " foco hoje" : " focos hoje"));
+        pomoCountLabel.setText(n == 0 ? "" : n + (n == 1 ? " foco hoje" : " focos hoje"));
     }
 
     // ── HELPERS UI ──────────────────────────────────────────────────────────
@@ -1853,10 +2284,11 @@ public class StudyTracker extends JFrame {
     // ── TIMERS ──────────────────────────────────────────────────────────────
 
     private void setupTimers() {
-        stopwatch = new Timer(1000, e -> { elapsedSeconds++; updateStopwatchLabel(); });
+        stopwatch = new Timer(1000, e -> { elapsedSeconds++; updateStopwatchLabel(); refreshFocusBar(); });
         countdownTimer = new Timer(1000, e -> {
             countdownSecondsRemaining--;
             updateCountdownLabel();
+            refreshFocusBar();
             if (countdownSecondsRemaining <= 0) stopCountdown(true);
         });
     }
@@ -1867,7 +2299,8 @@ public class StudyTracker extends JFrame {
         if (subjectComboBox.getSelectedItem() == null) {
             toast("Selecione uma matéria!"); return;
         }
-        if (stopwatchGrossStartMs == 0) stopwatchGrossStartMs = System.currentTimeMillis();
+        boolean novaSessao = stopwatchGrossStartMs == 0;   // retomar não reabre o modo foco
+        if (novaSessao) stopwatchGrossStartMs = System.currentTimeMillis();
         lastActivityMs = System.currentTimeMillis();
         stopwatch.start();
         startButton.setText("Retomar");
@@ -1875,6 +2308,9 @@ public class StudyTracker extends JFrame {
         submitButton.setEnabled(false); resetStopwatchButton.setEnabled(true);
         subjectComboBox.setEnabled(false);
         updateStopwatchInfo();
+        refreshNowCard();
+        if (novaSessao) enterFocusMode(false);
+        refreshFocusBar();
     }
 
     private void stopStopwatch() {
@@ -1885,6 +2321,7 @@ public class StudyTracker extends JFrame {
         resetStopwatchButton.setEnabled(elapsedSeconds > 0);
         subjectComboBox.setEnabled(true);
         updateStopwatchInfo();
+        refreshFocusBar();
     }
 
     /** Zera SOMENTE o cronômetro (o tempo acumulado da matéria não é tocado). */
@@ -1902,6 +2339,8 @@ public class StudyTracker extends JFrame {
         submitButton.setEnabled(false);
         resetStopwatchButton.setEnabled(false);
         subjectComboBox.setEnabled(true);
+        if (!sessionInProgress()) exitFocusMode();   // sessão terminou (salva ou zerada)
+        refreshNowCard();
     }
 
     private void submitStopwatchTime() {
@@ -1912,7 +2351,7 @@ public class StudyTracker extends JFrame {
             toast("Abaixo do foco mínimo (" + setMinFocusMin + " min) — não salvo.");
             return;   // mantém o tempo para o usuário continuar
         }
-        addTime(subject, mins, "cronometro");
+        addTime(subject, mins, "cronometro", askSessionDetails(subject, mins, "Sessão concluída"));
         toast(formatTime(mins * 60) + " salvo em " + subject);
         resetStopwatch();
         transitionNudge();
@@ -1922,7 +2361,7 @@ public class StudyTracker extends JFrame {
     private void transitionNudge() {
         if (setTransitionMin <= 0) return;
         Timer t = new Timer(2600, e -> toast("Bloco salvo. Que tal " + setTransitionMin
-                + " min de pausa? Levanta, água. 💧"));
+                + " min de pausa? Levanta, bebe água."));
         t.setRepeats(false); t.start();
     }
 
@@ -1944,8 +2383,107 @@ public class StudyTracker extends JFrame {
 
         if (setHyperfocusH > 0 && !hyperfocusWarned && grossSec >= setHyperfocusH * 3600L) {
             hyperfocusWarned = true;
-            toast("Você está há " + setHyperfocusH + "h seguidas. Dá um respiro? 🌱");
+            toast("Você está há " + setHyperfocusH + "h seguidas. Dá um respiro?");
         }
+    }
+
+    // ── MODO FOCO ───────────────────────────────────────────────────────────
+    // Ao começar uma sessão, a janela some e fica só a faixa (FocusBar): o tempo à vista,
+    // nada competindo pela atenção. Volta sozinha quando a sessão termina.
+
+    private FocusBar focusBar;
+
+    private boolean pomodoroActive() {
+        return countdownTimer != null && (countdownTimer.isRunning() || isPaused);
+    }
+
+    /** force = pedido explícito ("Modo foco" no cartão Agora), vale mesmo com o ajuste desligado. */
+    private void enterFocusMode(boolean force) {
+        if ((!setFocusMode && !force) || focusBar != null || !sessionInProgress()) return;
+        focusBar = new FocusBar(new FocusBar.Actions() {
+            public void togglePause() { focusTogglePause(); }
+            public void finish()      { focusFinish(); }
+            public void expand()      { exitFocusMode(); }
+        });
+        refreshFocusBar();
+        focusBar.setVisible(true);
+        setVisible(false);
+    }
+
+    private void exitFocusMode() {
+        if (focusBar == null) return;
+        focusBar.dispose();
+        focusBar = null;
+        setVisible(true);
+        setState(Frame.NORMAL);
+        toFront();
+        refreshNowCard();
+    }
+
+    private void focusTogglePause() {
+        if (pomodoroActive()) togglePauseCountdown();
+        else                  toggleStopwatch();
+    }
+
+    private void focusFinish() {
+        if (pomodoroActive()) {
+            if (!wasFocusSession) { stopCountdown(false); return; }   // encerrar a pausa não perde nada
+            int r = JOptionPane.showConfirmDialog(dialogOwner(),
+                    "Parar este bloco agora? O tempo dele não é salvo.\n"
+                  + "(Para salvar o tempo, use o cronômetro em vez do Pomodoro.)",
+                    "Parar Pomodoro", JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE);
+            if (r == JOptionPane.YES_OPTION) stopCountdown(false);
+        } else {
+            if (stopwatch.isRunning()) stopStopwatch();   // conta como no "Salvar Tempo": pausa e salva
+            submitStopwatchTime();
+        }
+    }
+
+    /** Diálogos durante o modo foco aparecem junto da faixa (a janela principal está escondida). */
+    private Component dialogOwner() {
+        return focusBar != null ? focusBar : this;
+    }
+
+    private void refreshFocusBar() {
+        if (focusBar == null) return;
+        String area = (String) subjectComboBox.getSelectedItem();
+        StudyData sd = area == null ? null : studyDataMap.get(area);
+        Color cor = sd != null ? sd.getColor() : AppTheme.ACCENT;
+        String nome = area == null ? "" : area;
+        if (pendingSubFoco != null) nome += " · " + pendingSubFoco;
+
+        boolean pomo = pomodoroActive(), pausado;
+        int correndo;   // minutos da sessão atual, ainda não salvos
+        String tempo, status, fim;
+        if (pomo) {
+            pausado = isPaused;
+            int r = Math.max(0, countdownSecondsRemaining);
+            tempo = String.format("%02d:%02d", r / 60, r % 60);
+            fim = "Parar";
+            if (!wasFocusSession) {
+                nome = "Pausa do Pomodoro"; cor = AppTheme.ACCENT; correndo = 0; area = null;
+                status = pausado ? "pausado" : "levanta, água, respira";
+            } else {
+                correndo = Math.max(0, plannedMinutes * 60 - r) / 60;
+                status = pausado ? "pausado" : "Pomodoro · " + (pomoCycleFocos + 1) + "º foco";
+            }
+        } else {
+            pausado = !stopwatch.isRunning();
+            int e = elapsedSeconds;
+            tempo = String.format("%02d:%02d:%02d", e / 3600, (e % 3600) / 60, e % 60);
+            correndo = e / 60;
+            status = pausado ? "pausado" : "contando";
+            fim = "Terminar";
+        }
+
+        double frac = -1;
+        int ideal = area == null ? 0 : goals.getOrDefault(area, 0);
+        if (ideal > 0 && isGoalDay(area, LocalDate.now())) {
+            int feito = minutesOnDay(area, LocalDate.now()) + correndo;
+            frac = feito / (double) ideal;
+            status += "  ·  " + fmtHM(feito) + " de " + fmtHM(ideal) + " hoje";
+        }
+        focusBar.update(nome, cor, tempo, status, pausado, frac, fim);
     }
 
     // ── POMODORO ────────────────────────────────────────────────────────────
@@ -1970,9 +2508,11 @@ public class StudyTracker extends JFrame {
         startFocusButton.setEnabled(false);
         startBreakButton.setEnabled(false);
         stopCountdownButton.setEnabled(true);
-        stopCountdownButton.setText("⏸ Pausar");
+        stopCountdownButton.setText("Pausar");
         resetButton.setEnabled(true);
         subjectComboBox.setEnabled(false);
+        refreshNowCard();
+        refreshFocusBar();
     }
 
     private void stopCountdown(boolean finished) {
@@ -1983,7 +2523,11 @@ public class StudyTracker extends JFrame {
             String subject = (String) subjectComboBox.getSelectedItem();
             boolean didFocus = wasFocusSession && subject != null;
             if (didFocus) {
-                addTime(subject, plannedMinutes, "pomodoro");
+                // Ciclo automático não para pra perguntar: o próximo bloco começa sozinho.
+                SessionDetails d;
+                if (setPomoAutoCycle) d = SessionDetails.of(pendingSubFoco);
+                else { exitFocusMode(); d = askSessionDetails(subject, plannedMinutes, "Foco concluído"); }
+                addTime(subject, plannedMinutes, "pomodoro", d);
                 pomoCycleFocos++;
                 updatePomodoroCount();
             }
@@ -2000,9 +2544,8 @@ public class StudyTracker extends JFrame {
                     if (startCountdownIfPossible(true)) return;
                 }
             } else {
-                if (didFocus) showInfoDialog("✅ Foco concluído!",
-                        plannedMinutes + " min adicionados a " + subject + ".");
-                else          showInfoDialog("☕ Pausa concluída!", "Pronto para mais uma sessão?");
+                exitFocusMode();   // o aviso de fim aparece com o app aberto
+                if (!didFocus) showInfoDialog("Pausa concluída", "Pronto para mais uma sessão?");
             }
         }
 
@@ -2014,9 +2557,11 @@ public class StudyTracker extends JFrame {
         isPaused = false;
         startFocusButton.setEnabled(true); startBreakButton.setEnabled(true);
         stopCountdownButton.setEnabled(false);
-        stopCountdownButton.setText("⏸ Pausar");
+        stopCountdownButton.setText("Pausar");
         resetButton.setEnabled(false);
         subjectComboBox.setEnabled(true);
+        if (!sessionInProgress()) exitFocusMode();
+        refreshNowCard();
     }
 
     /** Tenta iniciar o foco no ciclo automático; devolve false se não deu (ex.: sem matéria). */
@@ -2031,7 +2576,7 @@ public class StudyTracker extends JFrame {
             // Retomar
             isPaused = false;
             countdownTimer.start();
-            stopCountdownButton.setText("⏸ Pausar");
+            stopCountdownButton.setText("Pausar");
             statusLabel.setText(wasFocusSession
                     ? "Focando em " + subjectComboBox.getSelectedItem() + "…"
                     : "Em pausa…");
@@ -2039,10 +2584,11 @@ public class StudyTracker extends JFrame {
             // Pausar
             isPaused = true;
             countdownTimer.stop();
-            stopCountdownButton.setText("▶ Retomar");
-            statusLabel.setText("⏸ Pausado");
+            stopCountdownButton.setText("Retomar");
+            statusLabel.setText("Pausado");
             statusLabel.setForeground(AppTheme.WARNING);
         }
+        refreshFocusBar();
     }
 
     private void updateCountdownLabel() {
@@ -2060,7 +2606,7 @@ public class StudyTracker extends JFrame {
             int m   = minutesField.getText().trim().isEmpty() ? 0 : Integer.parseInt(minutesField.getText().trim());
             int tot = h * 60 + m;
             if (tot > 0) {
-                addTime(subject, tot, "manual");
+                addTime(subject, tot, "manual", askSessionDetails(subject, tot, "Tempo adicionado"));
                 hoursField.setText(""); minutesField.setText("");
                 toast(formatTime(tot * 60) + " adicionado a " + subject);
             } else { toast("Insira um tempo válido."); }
@@ -2069,22 +2615,126 @@ public class StudyTracker extends JFrame {
 
     // ── DATA (tempo + sessão) ────────────────────────────────────────────────
 
-    private void addTime(String subject, int minutes, String type) {
+    /** Sub-foco, energia (0 = não informada, 1..3) e nota de uma sessão. Tudo opcional. */
+    private static final class SessionDetails {
+        final String kind, note;
+        final int energy;
+        SessionDetails(String kind, String note, int energy) {
+            this.kind = kind == null ? "" : kind;
+            this.note = note == null ? "" : note;
+            this.energy = energy;
+        }
+        static SessionDetails of(String kind) { return new SessionDetails(kind, "", 0); }
+    }
+
+    /**
+     * "Como foi?" ao terminar: sub-foco e energia em botões de 1 clique, nota opcional.
+     * Enter salva; fechar a janela também salva (o tempo nunca se perde por causa do diálogo).
+     */
+    private SessionDetails askSessionDetails(String subject, int minutes, String titulo) {
+        if (!setAskDetails) return SessionDetails.of(pendingSubFoco);
+
+        JPanel panel = new JPanel(new GridBagLayout());
+        GridBagConstraints c = new GridBagConstraints();
+        c.gridx = 0; c.anchor = GridBagConstraints.WEST; c.fill = GridBagConstraints.HORIZONTAL;
+        c.weightx = 1; c.insets = new Insets(2, 2, 2, 2);
+        int row = 0;
+
+        c.gridy = row++;
+        panel.add(dlgLabel(fmtHM(minutes) + " de " + subject + ". Como foi?", true), c);
+
+        java.util.List<String> sfs = subFocos.getOrDefault(subject, java.util.Collections.emptyList());
+        ChoiceRow sfRow = null;
+        if (!sfs.isEmpty()) {
+            c.gridy = row++; c.insets = new Insets(10, 2, 2, 2);
+            panel.add(dlgHint("No que você focou?"), c);
+            sfRow = new ChoiceRow(sfs.toArray(new String[0]), sfs.indexOf(pendingSubFoco));
+            c.gridy = row++; c.insets = new Insets(2, 2, 2, 2);
+            panel.add(sfRow, c);
+        }
+
+        c.gridy = row++; c.insets = new Insets(10, 2, 2, 2);
+        panel.add(dlgHint("Energia"), c);
+        ChoiceRow enRow = new ChoiceRow(new String[]{ENERGY_TEXT[1], ENERGY_TEXT[2], ENERGY_TEXT[3]}, -1);
+        c.gridy = row++; c.insets = new Insets(2, 2, 2, 2);
+        panel.add(enRow, c);
+
+        c.gridy = row++; c.insets = new Insets(10, 2, 2, 2);
+        panel.add(dlgHint("Nota (vai para o Histórico)"), c);
+        JTextField note = new JTextField(28);
+        note.setFont(AppTheme.FONT_LABEL);
+        c.gridy = row++; c.insets = new Insets(2, 2, 2, 2);
+        panel.add(note, c);
+
+        JOptionPane op = new JOptionPane(panel, JOptionPane.PLAIN_MESSAGE, JOptionPane.DEFAULT_OPTION,
+                null, new Object[]{"Salvar"}, "Salvar");
+        JDialog dlg = op.createDialog(dialogOwner(), titulo);
+        dlg.addWindowFocusListener(new WindowAdapter() {   // já dá para digitar a nota; Enter salva
+            @Override public void windowGainedFocus(WindowEvent e) { note.requestFocusInWindow(); }
+        });
+        note.addActionListener(e -> op.setValue("Salvar"));
+        dlg.setVisible(true);
+        dlg.dispose();
+
+        String kind = sfRow != null && sfRow.selected() >= 0 ? sfs.get(sfRow.selected()) : null;
+        String txt = AppTheme.semHtml(note.getText().replace('|', '/').trim());   // | separa campos da sessão
+        return new SessionDetails(kind, txt, enRow.selected() + 1);
+    }
+
+    /** Linha de botões em que no máximo um fica marcado; clicar no marcado desmarca. */
+    private static final class ChoiceRow extends JPanel {
+        private final java.util.List<JToggleButton> btns = new ArrayList<>();
+        ChoiceRow(String[] labels, int initial) {
+            super(new FlowLayout(FlowLayout.LEFT, 6, 0));
+            for (int i = 0; i < labels.length; i++) {
+                // Pintado à mão: no Nimbus o botão marcado quase não se distingue do desmarcado.
+                JToggleButton b = new JToggleButton(labels[i], i == initial) {
+                    @Override protected void paintComponent(Graphics g) {
+                        Graphics2D g2 = (Graphics2D) g.create();
+                        g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                        g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+                        int w = getWidth(), h = getHeight();
+                        if (isSelected()) {
+                            g2.setColor(AppTheme.ACCENT);
+                            g2.fillRoundRect(0, 0, w - 1, h - 1, 14, 14);
+                        } else {
+                            g2.setColor(getModel().isRollover() ? AppTheme.SURFACE2 : AppTheme.SURFACE);
+                            g2.fillRoundRect(0, 0, w - 1, h - 1, 14, 14);
+                            g2.setColor(AppTheme.DIVIDER);
+                            g2.drawRoundRect(0, 0, w - 1, h - 1, 14, 14);
+                        }
+                        g2.setFont(isSelected() ? AppTheme.FONT_BOLD : AppTheme.FONT_LABEL);
+                        g2.setColor(isSelected() ? Color.WHITE : AppTheme.TEXT_PRI);
+                        FontMetrics fm = g2.getFontMetrics();
+                        g2.drawString(getText(), (w - fm.stringWidth(getText())) / 2,
+                                (h - fm.getHeight()) / 2 + fm.getAscent());
+                        g2.dispose();
+                    }
+                };
+                b.setFont(AppTheme.FONT_BOLD);   // mede pelo negrito: o texto não muda de tamanho ao marcar
+                b.setContentAreaFilled(false);
+                b.setBorderPainted(false);
+                b.setBorder(BorderFactory.createEmptyBorder(6, 14, 6, 14));
+                b.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+                b.setFocusPainted(false);
+                b.addActionListener(e -> { if (b.isSelected()) for (JToggleButton o : btns) if (o != b) o.setSelected(false); });
+                btns.add(b);
+                add(b);
+            }
+        }
+        int selected() {
+            for (int i = 0; i < btns.size(); i++) if (btns.get(i).isSelected()) return i;
+            return -1;
+        }
+    }
+
+    private void addTime(String subject, int minutes, String type, SessionDetails d) {
         LocalDate today = LocalDate.now();
         int beforeToday = minutesOnDay(subject, today);
 
-        String note = noteField == null ? "" : noteField.getText().trim();
-        String kind = "";
-        if (kindCombo != null) {
-            Object sel = kindCombo.getSelectedItem();
-            if (sel != null && !"–".equals(sel) && !KIND_MANAGE.equals(sel)) kind = sel.toString();
-        }
-        int energy = energyCombo == null ? 0 : Math.max(0, energyCombo.getSelectedIndex());
         studyDataMap.get(subject).addMinutes(minutes);
-        sessions.add(new StudySession(subject, minutes, System.currentTimeMillis(), type, note, kind, energy));
-        if (noteField != null) noteField.setText("");
-        if (kindCombo != null && kindCombo.getItemCount() > 0) kindCombo.setSelectedIndex(0);
-        if (energyCombo != null) energyCombo.setSelectedIndex(0);
+        sessions.add(new StudySession(subject, minutes, System.currentTimeMillis(), type, d.note, d.kind, d.energy));
+        pendingSubFoco = null;
         updateUI();
         saveData(); saveSessions();
 
@@ -2098,9 +2748,9 @@ public class StudyTracker extends JFrame {
         final String msg;
         int alvo = dailyMinFor(subject);   // celebra ao bater o MÍNIMO
         if (before < alvo && after >= alvo) {
-            msg = "🎯 Você bateu a meta de " + subject + " hoje!  (" + fmtHM(after) + ")";
+            msg = "Você bateu a meta de " + subject + " hoje!  (" + fmtHM(after) + ")";
         } else if (!isHardDay(LocalDate.now()) && after < alvo && alvo - after <= 15) {
-            msg = "Faltam " + (alvo - after) + " min para a meta de " + subject + " hoje 💪";
+            msg = "Faltam " + (alvo - after) + " min para a meta de " + subject + " hoje.";
         } else {
             return;
         }
@@ -2226,7 +2876,7 @@ public class StudyTracker extends JFrame {
     /** Selo do marco para exibir na linha de sequência. */
     private static String streakBadge(int streak) {
         int mk = streakMilestone(streak);
-        return mk == 0 ? "" : mk >= 365 ? "  🏆" : mk >= 100 ? "  🥇" : mk >= 30 ? "  🥈" : "  🥉";
+        return mk == 0 ? "" : "  · marco de " + mk;
     }
 
     /** Melhor sequência registrada (recorde). subject == null ⇒ geral. */
@@ -2246,7 +2896,7 @@ public class StudyTracker extends JFrame {
         if (mk > celebratedStreakMilestone) {
             celebratedStreakMilestone = mk;
             if (ready) {
-                Timer t = new Timer(400, e -> toast("🎉 " + mk + " dias de sequência! Continue assim."));
+                Timer t = new Timer(400, e -> toast(mk + " dias de sequência! Continue assim."));
                 t.setRepeats(false); t.start();
             }
         }
@@ -2647,27 +3297,50 @@ public class StudyTracker extends JFrame {
         if (name.isEmpty()) return;
         String type = TYPE_KEYS[Math.max(0, cbType.getSelectedIndex())];
 
-        if (archived.remove(name)) {                       // era arquivada → desarquiva
-            refreshCombo(); subjectComboBox.setSelectedItem(name); updateUI();
-            toast("\"" + name + "\" desarquivada."); return;
-        }
+        if (archived.contains(name)) { unarchiveSubject(name); return; }   // era arquivada → desarquiva
         if (studyDataMap.containsKey(name)) { toast("Essa área já existe!"); return; }
         studyDataMap.put(name, new StudyData(0, AppTheme.nextColor(studyDataMap.size())));
         if (!"estudo".equals(type)) areaType.put(name, type);
-        refreshCombo(); subjectComboBox.setSelectedItem(name); updateUI();
+        refreshCombo(); selectIfIdle(name); updateUI();
+    }
+
+    private void unarchiveSubject(String name) {
+        if (!archived.remove(name)) return;
+        refreshCombo(); selectIfIdle(name); updateUI();
+        toast("\"" + name + "\" desarquivada.");
+    }
+
+    /** Tem sessão em andamento (cronômetro com tempo ou Pomodoro rodando)? */
+    private boolean sessionInProgress() {
+        return elapsedSeconds > 0 || (stopwatch != null && stopwatch.isRunning()) || pomodoroActive();
+    }
+
+    /** Seleciona a área no combo só se não houver sessão contando: senão o tempo iria para a área errada. */
+    private void selectIfIdle(String area) {
+        if (!sessionInProgress()) subjectComboBox.setSelectedItem(area);
+    }
+
+    /** Arquivar/deletar a área da sessão em andamento faria o tempo ir para outra área. */
+    private boolean blockIfRunning(String area) {
+        if (sessionInProgress() && area.equals(subjectComboBox.getSelectedItem())) {
+            toast("Termine ou zere a sessão de \"" + area + "\" antes.");
+            return true;
+        }
+        return false;
     }
 
     private JComboBox<String> tipoCombo(String selectedKey) {
         String[] itens = new String[TYPE_KEYS.length];
-        for (int i = 0; i < TYPE_KEYS.length; i++) itens[i] = TYPE_ICONS[i] + "  " + TYPE_LABELS[i];
+        for (int i = 0; i < TYPE_KEYS.length; i++) itens[i] = TYPE_LABELS[i];
         JComboBox<String> cb = new JComboBox<>(itens);
         cb.setSelectedIndex(typeIndex(selectedKey));
         cb.setFont(AppTheme.FONT_LABEL);
         return cb;
     }
 
-    private void editSubjectName() {
-        String old = (String) subjectComboBox.getSelectedItem(); if (old == null) return;
+    private void editSubjectName(String old) {
+        if (old == null || !studyDataMap.containsKey(old)) return;
+        Object cur = subjectComboBox.getSelectedItem();   // a área do cronômetro não muda
 
         JTextField fName = new JTextField(old, 18);
         JComboBox<String> cbType = tipoCombo(typeOf(old));
@@ -2684,7 +3357,7 @@ public class StudyTracker extends JFrame {
         if ("estudo".equals(novoTipo)) areaType.remove(old); else areaType.put(old, novoTipo);
 
         String nw = AppTheme.semHtml(fName.getText().replace('|', '/').trim());
-        if (nw.isEmpty() || nw.equals(old)) { refreshCombo(); subjectComboBox.setSelectedItem(old); updateUI(); return; }
+        if (nw.isEmpty() || nw.equals(old)) { refreshCombo(); subjectComboBox.setSelectedItem(cur); updateUI(); return; }
         if (studyDataMap.containsKey(nw)) { toast("Esse nome já existe!"); return; }
         StudyData d = studyDataMap.remove(old);
         // Reconstrói mantendo ordem
@@ -2707,17 +3380,17 @@ public class StudyTracker extends JFrame {
         weekPlan.values().forEach(l -> l.replaceAll(a -> old.equals(a) ? nw : a));
         for (ChecklistItem it : checklist) if (it.subject.equals(old)) it.subject = nw;
         if (examDate.containsKey(old))   { examDate.put(nw, examDate.remove(old)); }
-        refreshCombo(); subjectComboBox.setSelectedItem(nw); saveChecklist(); updateUI();
+        refreshCombo(); subjectComboBox.setSelectedItem(old.equals(cur) ? nw : cur); saveChecklist(); updateUI();
     }
 
-    private void changeSubjectColor() {
-        String s = (String) subjectComboBox.getSelectedItem(); if (s == null) return;
+    private void changeSubjectColor(String s) {
+        if (s == null || !studyDataMap.containsKey(s)) return;
         Color c = JColorChooser.showDialog(this, "Cor de " + s, studyDataMap.get(s).getColor());
         if (c != null) { studyDataMap.get(s).setColor(c); updateUI(); }
     }
 
-    private void zeroOutSubjectTime() {
-        String s = (String) subjectComboBox.getSelectedItem(); if (s == null) return;
+    private void zeroOutSubjectTime(String s) {
+        if (s == null || !studyDataMap.containsKey(s)) return;
         int mins = studyDataMap.get(s).getMinutes();
         int r = JOptionPane.showConfirmDialog(this,
                 "Isto zera TODO o tempo acumulado de \"" + s + "\" (" + fmtHM(mins) + ").\n"
@@ -2727,14 +3400,13 @@ public class StudyTracker extends JFrame {
         if (r == JOptionPane.YES_OPTION) { studyDataMap.get(s).setMinutes(0); updateUI(); toast("Tempo de \"" + s + "\" zerado."); }
     }
 
-    private void archiveSubject() {
-        String s = (String) subjectComboBox.getSelectedItem();
-        if (s == null) return;
+    private void archiveSubject(String s) {
+        if (s == null || !studyDataMap.containsKey(s) || blockIfRunning(s)) return;
         long ativas = studyDataMap.keySet().stream().filter(k -> !archived.contains(k)).count();
         if (ativas <= 1) { toast("Deixe ao menos uma matéria ativa."); return; }
         int r = JOptionPane.showConfirmDialog(this,
                 "Arquivar \"" + s + "\"?\nEla sai da lista, mas o tempo e o histórico são mantidos.\n"
-              + "Para reativar, use \"+ Matéria\" e digite o mesmo nome.",
+              + "Para reativar, use \"Reativar\" na tela Áreas.",
                 "Arquivar matéria", JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE);
         if (r != JOptionPane.YES_OPTION) return;
         archived.add(s);
@@ -2742,9 +3414,13 @@ public class StudyTracker extends JFrame {
         toast("\"" + s + "\" arquivada.");
     }
 
-    private void deleteSubject() {
-        String s = (String) subjectComboBox.getSelectedItem(); if (s == null) return;
-        int r = JOptionPane.showConfirmDialog(this, "Deletar \"" + s + "\"? Todo o tempo será perdido.", "Deletar Matéria", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+    private void deleteSubject(String s) {
+        if (s == null || !studyDataMap.containsKey(s) || blockIfRunning(s)) return;
+        if (!archived.contains(s)
+                && studyDataMap.keySet().stream().filter(k -> !archived.contains(k)).count() <= 1) {
+            toast("Deixe ao menos uma área ativa."); return;
+        }
+        int r =JOptionPane.showConfirmDialog(this, "Deletar \"" + s + "\"? Todo o tempo será perdido.", "Deletar Matéria", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
         if (r == JOptionPane.YES_OPTION) { studyDataMap.remove(s); goals.remove(s); goalsMin.remove(s); goalsWeek.remove(s); goalsMonth.remove(s); streakBest.remove(s); goalDays.remove(s); examDate.remove(s); archived.remove(s); areaType.remove(s); subFocos.remove(s); weekPlan.values().forEach(l -> l.remove(s)); weekPlan.values().removeIf(java.util.List::isEmpty); checklist.removeIf(it -> it.subject.equals(s)); saveChecklist(); refreshCombo(); updateUI(); }
     }
 
@@ -2861,11 +3537,9 @@ public class StudyTracker extends JFrame {
         // Volta os ajustes ao padrão: um backup sem alguma chave não pode herdar o valor antigo.
         setMinFocusMin = 1; setIdleMinutes = 10; setPomoAutoCycle = false;
         setReminderHour = -1; setTransitionMin = 5; setHyperfocusH = 3;
-        setUpdateCheck = true; updateCheckedDay = null;
+        setUpdateCheck = true; updateCheckedDay = null; setFocusMode = true; setAskDetails = true;
         weeklySummaryShownWeek = null; reminderShownDay = null; balanceNudgeWeek = null;
         loadOk = true;
-        // O planejador aberto guarda a lista de áreas antiga.
-        if (plannerWindow != null) { plannerWindow.dispose(); plannerWindow = null; }
 
         ready = false;            // não grava nada enquanto recarrega
         loadData();               // pode trocar o tema (__theme__ do backup)
@@ -2923,6 +3597,21 @@ public class StudyTracker extends JFrame {
         c.gridx = 0; c.gridy = row++; c.gridwidth = 2;
         panel.add(dlgHint("Se não tiver estudado até essa hora, o app avisa (notificação do Windows)."), c);
 
+        JCheckBox cbAsk = new JCheckBox("Ao terminar, perguntar sub-foco, energia e nota", setAskDetails);
+        cbAsk.setOpaque(false);
+        JCheckBox cbFocus = new JCheckBox("Ao começar uma sessão, recolher a janela numa faixa pequena", setFocusMode);
+        cbFocus.setOpaque(false);
+        c.gridx = 0; c.gridy = row++; c.gridwidth = 2; c.insets = new Insets(12, 4, 2, 4);
+        panel.add(dlgLabel("Modo foco", true), c);
+        c.gridy = row++; c.insets = new Insets(2, 4, 4, 4);
+        panel.add(cbFocus, c);
+        c.gridy = row++; c.insets = new Insets(0, 4, 4, 4);
+        panel.add(dlgHint("A faixa fica por cima das outras janelas, com o tempo e a meta de hoje. \"Abrir app\" volta para a tela cheia."), c);
+        c.gridy = row++; c.insets = new Insets(8, 4, 4, 4);
+        panel.add(cbAsk, c);
+        c.gridy = row++; c.insets = new Insets(0, 4, 4, 4);
+        panel.add(dlgHint("Tudo opcional: Enter salva. Desligado, salva direto (com o sub-foco sugerido, se houver)."), c);
+
         c.gridx = 0; c.gridy = row++; c.gridwidth = 2; c.insets = new Insets(12, 4, 2, 4);
         panel.add(dlgLabel("Pomodoro", true), c);
         c.gridy = row++; c.insets = new Insets(2, 4, 4, 4);
@@ -2965,6 +3654,8 @@ public class StudyTracker extends JFrame {
         setTransitionMin = (int) spTrans.getValue();
         setHyperfocusH   = (int) spHyper.getValue();
         setPomoAutoCycle = cbCycle.isSelected();
+        setFocusMode     = cbFocus.isSelected();
+        setAskDetails    = cbAsk.isSelected();
         setUpdateCheck   = cbUpdate.isSelected();
         String rem = (String) cbReminder.getSelectedItem();
         setReminderHour = (rem == null || rem.startsWith("Des")) ? -1 : Integer.parseInt(rem.substring(0, 2));
@@ -2976,7 +3667,7 @@ public class StudyTracker extends JFrame {
     // ── TEMA ────────────────────────────────────────────────────────────────
 
     private void toggleTheme() {
-        String[] options = {"☀  Claro", "🌙  Escuro"};
+        String[] options = {"Claro", "Escuro"};
         int current = AppTheme.dark ? 1 : 0;
         int choice = JOptionPane.showOptionDialog(this,
                 "Escolha o tema da interface:",
@@ -3048,6 +3739,8 @@ public class StudyTracker extends JFrame {
         }
         updateGoalProgress();
         refreshStreaks();
+        if (weekScreen != null) weekScreen.setAreas(activeAreas(), areaColors());
+        refreshAreasScreen();
         refreshTodayCard();
         refreshNowCard();
         refreshBalanceCard();
@@ -3104,27 +3797,11 @@ public class StudyTracker extends JFrame {
         for (String s : studyDataMap.keySet())
             if (!archived.contains(s) && typeIndexKnown(typeOf(s)) < 0) subjectComboBox.addItem(s);
         if (sel != null && !archived.contains(sel)) subjectComboBox.setSelectedItem(sel);
-        refreshKindCombo();
     }
 
     private static int typeIndexKnown(String key) {
         for (int i = 0; i < TYPE_KEYS.length; i++) if (TYPE_KEYS[i].equals(key)) return i;
         return -1;
-    }
-
-    /** Popula o combo de sub-foco com os sub-focos da área ativa. */
-    private void refreshKindCombo() {
-        if (kindCombo == null) return;
-        String area = (String) subjectComboBox.getSelectedItem();
-        ActionListener[] ls = kindCombo.getActionListeners();
-        for (ActionListener l : ls) kindCombo.removeActionListener(l);
-        kindCombo.removeAllItems();
-        kindCombo.addItem("–");
-        if (area != null)
-            for (String sf : subFocos.getOrDefault(area, java.util.Collections.emptyList())) kindCombo.addItem(sf);
-        kindCombo.addItem(KIND_MANAGE);
-        kindCombo.setSelectedIndex(0);
-        for (ActionListener l : ls) kindCombo.addActionListener(l);
     }
 
     /** Diálogo para editar os sub-focos de uma área (um por linha). */
@@ -3167,7 +3844,6 @@ public class StudyTracker extends JFrame {
         }
         if (nova.isEmpty()) subFocos.remove(area); else subFocos.put(area, nova);
         saveData();
-        refreshKindCombo();
         toast("Sub-focos de \"" + area + "\" atualizados.");
     }
 
@@ -3212,6 +3888,8 @@ public class StudyTracker extends JFrame {
         p.setProperty("__transition_min__", String.valueOf(setTransitionMin));
         p.setProperty("__hyperfocus_h__",   String.valueOf(setHyperfocusH));
         p.setProperty("__update_check__",   String.valueOf(setUpdateCheck));
+        p.setProperty("__focus_mode__",     String.valueOf(setFocusMode));
+        p.setProperty("__ask_details__",    String.valueOf(setAskDetails));
         if (updateCheckedDay != null) p.setProperty("__update_checked_day__", updateCheckedDay);
         if (weeklySummaryShownWeek != null) p.setProperty("__week_summary_shown__", weeklySummaryShownWeek);
         if (reminderShownDay != null)       p.setProperty("__reminder_shown_day__", reminderShownDay);
@@ -3317,6 +3995,14 @@ public class StudyTracker extends JFrame {
                 }
                 if (k.equals("__hyperfocus_h__")) {
                     try { setHyperfocusH = Math.max(0, Integer.parseInt(p.getProperty(k))); } catch (Exception ignored) {}
+                    continue;
+                }
+                if (k.equals("__ask_details__")) {
+                    setAskDetails = !"false".equalsIgnoreCase(p.getProperty(k));
+                    continue;
+                }
+                if (k.equals("__focus_mode__")) {
+                    setFocusMode = !"false".equalsIgnoreCase(p.getProperty(k));
                     continue;
                 }
                 if (k.equals("__update_check__")) {
@@ -3456,7 +4142,8 @@ public class StudyTracker extends JFrame {
     // ── UTILS ───────────────────────────────────────────────────────────────
 
     private void toast(String msg) {
-        JWindow w = new JWindow(this);
+        Window anchor = focusBar != null ? focusBar : this;   // app recolhido: aparece embaixo da faixa
+        JWindow w = new JWindow(anchor);
         JLabel lbl = new JLabel(msg);
         lbl.setFont(AppTheme.FONT_LABEL);
         lbl.setForeground(Color.WHITE);
@@ -3469,8 +4156,9 @@ public class StudyTracker extends JFrame {
         w.setContentPane(panel);
         w.pack();
 
-        int baseX = getX() + (getWidth() - w.getWidth()) / 2;
-        int endY  = getY() + getHeight() - w.getHeight() - 56;
+        int baseX = anchor.getX() + (anchor.getWidth() - w.getWidth()) / 2;
+        int endY  = focusBar != null ? anchor.getY() + anchor.getHeight() + 10
+                                     : getY() + getHeight() - w.getHeight() - 56;
         int slide = 18;
 
         try { w.setOpacity(0f); } catch (Exception ignored) {}
@@ -3606,7 +4294,10 @@ public class StudyTracker extends JFrame {
             try {
                 trayIcon = new java.awt.TrayIcon(AppTheme.appIcon(16), "FocaEstudo");
                 trayIcon.setImageAutoSize(true);
-                trayIcon.addActionListener(e -> { setVisible(true); setState(Frame.NORMAL); toFront(); });
+                trayIcon.addActionListener(e -> {
+                    if (focusBar != null) { exitFocusMode(); return; }
+                    setVisible(true); setState(Frame.NORMAL); toFront();
+                });
                 java.awt.SystemTray.getSystemTray().add(trayIcon);
             } catch (Exception e) { trayIcon = null; }
         }
@@ -3679,7 +4370,7 @@ public class StudyTracker extends JFrame {
             sb.append("• vs. semana anterior: ")
               .append(d >= 0 ? "▲ +" + fmtHM(d) : "▼ " + fmtHM(-d)).append('\n');
         }
-        sb.append("\nBora manter o ritmo! 💪");
+        sb.append("\nBora manter o ritmo!");
 
         JOptionPane.showMessageDialog(this, sb.toString(),
                 "Resumo da semana", JOptionPane.INFORMATION_MESSAGE);
@@ -3694,7 +4385,7 @@ public class StudyTracker extends JFrame {
         JLabel ic = new JLabel(new ImageIcon(AppTheme.appIcon(48)));
         c.gridy = 0; c.insets = new Insets(0, 0, 10, 0); panel.add(ic, c);
 
-        JLabel h1 = new JLabel("Bem-vindo ao FocaEstudo 👋");
+        JLabel h1 = new JLabel("Bem-vindo ao FocaEstudo");
         h1.setFont(AppTheme.FONT_SECTION);
         c.gridy = 1; c.insets = new Insets(0, 0, 4, 0); panel.add(h1, c);
 
