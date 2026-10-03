@@ -21,7 +21,8 @@ Estudo, Físico, Lazer e Trabalho entram no mesmo lugar. Descanso e corpo contam
 
 ## Pilares técnicos (não quebrar)
 
-- **Java 11+** de linguagem-alvo (a máquina tem 25). Evitar APIs > 11 onde der.
+- **Java 17+** de linguagem-alvo (`--release 17` no `empacotar.ps1`; a máquina tem 25). O código já usa
+  *switch expressions* (Java 14+, ex.: `HistoryPanel`). Evitar APIs > 17.
 - **Gravação atômica** (`storeAtomic`: `.tmp` + `fsync` + rename) + `.bak` antes de cada save.
   Queda de luz no meio da gravação não corrompe. `*.bak`/`*.tmp` no `.gitignore`.
 - **Dados em `%APPDATA%\FocaEstudo`** (`DATA_DIR`; desde a 1.1.0), não na pasta do programa.

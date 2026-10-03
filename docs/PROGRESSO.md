@@ -25,8 +25,8 @@ Dados do usuário restaurados ao estado original + chaves de ajuste com valores 
 
 ## Ambiente
 
-- **Java 25** instalado; o código deve continuar compilando em **Java 11+** (não usar APIs > 11, ex.: não usar `Locale.of`).
-- Praticamente tudo está em `src/StudyTracker.java` (~1450 linhas). Classes de apoio: `AppTheme`, `StudyData`,
+- **Java 25** instalado; o código deve continuar compilando em **Java 17+** (`--release 17`; não usar APIs > 17, ex.: não usar `Locale.of`).
+- Praticamente tudo está em `src/StudyTracker.java` (~3.750 linhas em 10/2026). Classes de apoio: `AppTheme`, `StudyData`,
   `StudySession`, `CalendarPanel`, `PieChartPanel`, `HistoryPanel`, `CustomTabs`, `RoundedPanel`, `StyledButton`.
 - Dados (na **raiz** do projeto): `study_data.properties` (matérias, cores, metas, tema, ajustes) e
   `study_sessions.properties` (log de sessões).
@@ -35,7 +35,7 @@ Dados do usuário restaurados ao estado original + chaves de ajuste com valores 
 ## Armadilhas conhecidas
 
 - **Nunca rodar duas instâncias ao mesmo tempo** — elas gravam o mesmo arquivo e corrompem os dados.
-  Há trava por socket (`127.0.0.1:52147`); a 2ª cópia pergunta antes de abrir.
+  Há trava por arquivo (`focaestudo.lock` na pasta dos dados, desde a v1.0.1; antes era socket `127.0.0.1:52147`).
 - `.properties` é lido como ISO-8859-1: acentos em chaves aparecem como `\uXXXX`
   (ex.: `Estatística`). Ao editar o arquivo à mão, manter esse escape.
 - `updateUI()` chama `saveData()`. Só grava depois de `ready == true` (fim de `initializeUI`).

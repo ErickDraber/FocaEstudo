@@ -266,7 +266,7 @@ Nenhum dado do usuário é enviado.
 - `StudyTracker.java` com ~3.350 linhas mistura UI, regras e persistência.
 - Nenhum teste automatizado; nenhum CI.
 - Sem ferramenta de build (Maven/Gradle). As duas cópias do `Executar_Programa.bat` listam os arquivos à mão.
-- Os docs divergem na versão mínima do Java: `PILARES.md` diz Java 11+; `README` e `empacotar.ps1` usam 17.
+- ~~Os docs divergiam na versão mínima do Java~~: corrigido em 03/10/2026; todos usam Java 17+.
 - O `Executar_Programa.bat` não passa `-encoding UTF-8` (funciona porque o JDK 18+ já usa UTF-8 por padrão).
 - Os commits antigos (fase 1) têm `.class` e dados pessoais no histórico do git.
 
