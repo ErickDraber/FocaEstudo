@@ -1,7 +1,7 @@
 ﻿==============================================================
   FOCAESTUDO — COMO INSTALAR E USAR
-  Rastreador de estudos com cronômetro, Pomodoro, metas e
-  planejador semanal.
+  Organizador de rotina para quem tem TDAH: mostra o que fazer
+  agora, o tempo e as metas, sem cobrança.
 ==============================================================
 
 Não precisa instalar o Java nem mais nada: ele já vem junto.
@@ -58,11 +58,16 @@ Funciona no Windows 10 e 11 (64 bits).
 --------------------------------------------------------------
 
   1. Na tela "Bem-vindo ao FocaEstudo", troque o texto de
-     exemplo pelas SUAS matérias, separadas por vírgula.
-     Ex.:  Anatomia, Bioquímica, Inglês
-  2. Escolha a matéria que vai estudar.
-  3. Registre o tempo pela aba Cronômetro, Manual ou Pomodoro.
-  4. Tudo é salvo automaticamente.
+     exemplo pelas SUAS áreas (matérias, treino, lazer...),
+     separadas por vírgula.
+     Ex.:  Anatomia, Bioquímica, Academia
+  2. A tela "Hoje" mostra uma sugestão no cartão "Agora".
+     Clique em "Começar". Não gostou? "Outra coisa".
+  3. A janela vira uma faixa pequena com o tempo (modo foco).
+     Quando acabar, clique em "Terminar" e, se quiser, diga
+     como foi. "Abrir app" volta para a janela completa.
+  4. Semana, Progresso e Áreas ficam na barra da esquerda.
+     Tudo é salvo automaticamente.
 
 
 --------------------------------------------------------------
@@ -101,7 +106,9 @@ Funciona no Windows 10 e 11 (64 bits).
 --------------------------------------------------------------
 
   • Cliquei e nada abriu: talvez ele já esteja aberto (só
-    abre uma janela por vez). Olhe a barra de tarefas.
+    abre uma janela por vez). Olhe a barra de tarefas e o
+    canto de cima da tela (a faixa do modo foco).
+  • Não quero a faixa do modo foco: Ajustes > Modo foco.
   • O antivírus bloqueou: é falso alarme comum com programas
     novos. Permita o FocaEstudo.exe no antivírus.
   • Meus dados sumiram: confira se está no MESMO usuário do
