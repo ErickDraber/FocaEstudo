@@ -141,6 +141,7 @@ public class StudyTracker extends JFrame {
     private int     setTransitionMin = 5;      // pausa sugerida entre blocos (min); 0 = desligado
     private int     setHyperfocusH   = 3;      // aviso de hiperfoco após N h seguidas; 0 = desligado
     private boolean setUpdateCheck   = true;   // consulta o GitHub (1×/dia) se saiu versão nova
+    private boolean setFocusMode     = true;   // ao começar uma sessão, a janela vira a faixa do modo foco
     private String  updateCheckedDay = null;   // ISO date da última consulta que deu certo
 
     // --- Estado de recorrências ---
@@ -248,9 +249,10 @@ public class StudyTracker extends JFrame {
         KeyboardFocusManager.getCurrentKeyboardFocusManager().addKeyEventDispatcher(e -> {
             if (e.getID() != KeyEvent.KEY_PRESSED || e.getKeyCode() != KeyEvent.VK_SPACE) return false;
             KeyboardFocusManager kfm = KeyboardFocusManager.getCurrentKeyboardFocusManager();
-            if (kfm.getFocusedWindow() != this) return false;               // diálogo aberto: ignora
+            Window fw = kfm.getFocusedWindow();
+            if (fw != this && (focusBar == null || fw != focusBar)) return false;   // diálogo aberto: ignora
             if (kfm.getFocusOwner() instanceof javax.swing.text.JTextComponent) return false;
-            toggleStopwatch();
+            if (focusBar != null) focusTogglePause(); else toggleStopwatch();
             return true;   // consome o espaço
         });
     }
@@ -287,7 +289,7 @@ public class StudyTracker extends JFrame {
 
         idleAsking = true;
         stopStopwatch();                       // pausa enquanto pergunta
-        int r = JOptionPane.showConfirmDialog(this,
+        int r = JOptionPane.showConfirmDialog(dialogOwner(),
                 "Sem atividade há " + setIdleMinutes + " min.\nAinda está estudando?",
                 "Continuar?", JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE);
         idleAsking = false;
@@ -1004,6 +1006,31 @@ public class StudyTracker extends JFrame {
         nowBody.removeAll();
         LocalDate hoje = LocalDate.now();
 
+        // Sessão contando: o "agora" é ela, não uma sugestão nova.
+        if (sessionInProgress()) {
+            boolean pausaPomo = pomodoroActive() && !wasFocusSession;
+            String area = (String) subjectComboBox.getSelectedItem();
+            StudyData sd = area == null ? null : studyDataMap.get(area);
+            nowReason.setText(pausaPomo ? "Agora · pausa do Pomodoro" : "Agora · em andamento");
+            JLabel nm = new JLabel(pausaPomo ? "Pausa" : area,
+                    bigDot(sd != null && !pausaPomo ? sd.getColor() : AppTheme.ACCENT), SwingConstants.LEFT);
+            nm.setIconTextGap(10);
+            nm.setFont(AppTheme.FONT_TITLE);
+            nm.setForeground(AppTheme.TEXT_PRI);
+            StyledButton foco = new StyledButton("Modo foco", StyledButton.Variant.FILLED);
+            foco.setFont(AppTheme.FONT_BOLD);
+            foco.setBorder(BorderFactory.createEmptyBorder(8, 22, 8, 22));
+            foco.setToolTipText("Recolhe a janela numa faixa pequena com o tempo");
+            foco.addActionListener(e -> enterFocusMode(true));
+            JPanel goWrap = new JPanel(new GridBagLayout());
+            goWrap.setOpaque(false);
+            goWrap.add(foco);
+            nowBody.add(nm,     BorderLayout.CENTER);
+            nowBody.add(goWrap, BorderLayout.EAST);
+            nowBody.revalidate(); nowBody.repaint();
+            return;
+        }
+
         if (isHardDay(hoje)) {
             nowReason.setText("Agora · dia difícil");
             JLabel l = new JLabel("Sem cobrança hoje. Se der vontade, qualquer minuto conta.");
@@ -1357,7 +1384,7 @@ public class StudyTracker extends JFrame {
         if (faltando.isEmpty()) return;
         balanceNudgeWeek = semana;   // persistido no saveData() do updateUI
         Timer tt = new Timer(600, e -> toast("Sua semana está sem " + String.join(" e ", faltando)
-                + ". Que tal um pouco hoje? 🙂"));
+                + ". Que tal um pouco hoje?"));
         tt.setRepeats(false); tt.start();
     }
 
@@ -1893,7 +1920,7 @@ public class StudyTracker extends JFrame {
             for (ChecklistItem it : checklist)
                 if (it.subject.equals(subject)) { total++; if (it.done) feitos++; }
             if (total > 0)
-                base += "  ·  plano " + feitos + "/" + total + (feitos == total ? " ✓" : "");
+                base += "  ·  plano " + feitos + "/" + total + (feitos == total ? " · tudo feito" : "");
             l.setText(base);
             l.setForeground(dias <= 3 ? AppTheme.WARNING : AppTheme.ACCENT);
         }
@@ -1936,7 +1963,7 @@ public class StudyTracker extends JFrame {
             l.setForeground(AppTheme.TEXT_SEC);
         } else {
             boolean metToday = minutesOnDay(subject, LocalDate.now()) >= goal;
-            String txt = "🔥 " + streak + (streak == 1 ? " dia" : " dias") + streakBadge(streak)
+            String txt = "Sequência: " + streak + (streak == 1 ? " dia" : " dias") + streakBadge(streak)
                        + "   ·   recorde " + best;
             if (!metToday) txt += "   (estude hoje para manter)";
             l.setText(txt);
@@ -1976,7 +2003,7 @@ public class StudyTracker extends JFrame {
             boolean met = current >= goal;
             int pct = (int) Math.min(100, frac * 100.0);
             bar.set(frac, base, met);
-            val.setText(fmtHM(current) + " / " + fmtHM(goal) + "   " + (met ? "✓ " : "") + pct + "%");
+            val.setText(fmtHM(current) + " / " + fmtHM(goal) + "   " + (met ? "feito · " : "") + pct + "%");
             val.setForeground(met ? AppTheme.SUCCESS : AppTheme.TEXT_PRI);
         }
 
@@ -2221,7 +2248,7 @@ public class StudyTracker extends JFrame {
         // Descanso sempre disponível, não depende de ter rodado Foco antes
         startBreakButton.setEnabled(true);
 
-        startFocusButton.addActionListener(e    -> startCountdown(true));
+        startFocusButton.addActionListener(e    -> { startCountdown(true); enterFocusMode(false); });
         startBreakButton.addActionListener(e    -> startCountdown(false));
         stopCountdownButton.addActionListener(e -> togglePauseCountdown());
         resetButton.addActionListener(e         -> stopCountdown(false));
@@ -2296,10 +2323,11 @@ public class StudyTracker extends JFrame {
     // ── TIMERS ──────────────────────────────────────────────────────────────
 
     private void setupTimers() {
-        stopwatch = new Timer(1000, e -> { elapsedSeconds++; updateStopwatchLabel(); });
+        stopwatch = new Timer(1000, e -> { elapsedSeconds++; updateStopwatchLabel(); refreshFocusBar(); });
         countdownTimer = new Timer(1000, e -> {
             countdownSecondsRemaining--;
             updateCountdownLabel();
+            refreshFocusBar();
             if (countdownSecondsRemaining <= 0) stopCountdown(true);
         });
     }
@@ -2310,7 +2338,8 @@ public class StudyTracker extends JFrame {
         if (subjectComboBox.getSelectedItem() == null) {
             toast("Selecione uma matéria!"); return;
         }
-        if (stopwatchGrossStartMs == 0) stopwatchGrossStartMs = System.currentTimeMillis();
+        boolean novaSessao = stopwatchGrossStartMs == 0;   // retomar não reabre o modo foco
+        if (novaSessao) stopwatchGrossStartMs = System.currentTimeMillis();
         lastActivityMs = System.currentTimeMillis();
         stopwatch.start();
         startButton.setText("Retomar");
@@ -2318,6 +2347,9 @@ public class StudyTracker extends JFrame {
         submitButton.setEnabled(false); resetStopwatchButton.setEnabled(true);
         subjectComboBox.setEnabled(false);
         updateStopwatchInfo();
+        refreshNowCard();
+        if (novaSessao) enterFocusMode(false);
+        refreshFocusBar();
     }
 
     private void stopStopwatch() {
@@ -2328,6 +2360,7 @@ public class StudyTracker extends JFrame {
         resetStopwatchButton.setEnabled(elapsedSeconds > 0);
         subjectComboBox.setEnabled(true);
         updateStopwatchInfo();
+        refreshFocusBar();
     }
 
     /** Zera SOMENTE o cronômetro (o tempo acumulado da matéria não é tocado). */
@@ -2345,6 +2378,8 @@ public class StudyTracker extends JFrame {
         submitButton.setEnabled(false);
         resetStopwatchButton.setEnabled(false);
         subjectComboBox.setEnabled(true);
+        if (!sessionInProgress()) exitFocusMode();   // sessão terminou (salva ou zerada)
+        refreshNowCard();
     }
 
     private void submitStopwatchTime() {
@@ -2365,7 +2400,7 @@ public class StudyTracker extends JFrame {
     private void transitionNudge() {
         if (setTransitionMin <= 0) return;
         Timer t = new Timer(2600, e -> toast("Bloco salvo. Que tal " + setTransitionMin
-                + " min de pausa? Levanta, água. 💧"));
+                + " min de pausa? Levanta, bebe água."));
         t.setRepeats(false); t.start();
     }
 
@@ -2387,8 +2422,108 @@ public class StudyTracker extends JFrame {
 
         if (setHyperfocusH > 0 && !hyperfocusWarned && grossSec >= setHyperfocusH * 3600L) {
             hyperfocusWarned = true;
-            toast("Você está há " + setHyperfocusH + "h seguidas. Dá um respiro? 🌱");
+            toast("Você está há " + setHyperfocusH + "h seguidas. Dá um respiro?");
         }
+    }
+
+    // ── MODO FOCO ───────────────────────────────────────────────────────────
+    // Ao começar uma sessão, a janela some e fica só a faixa (FocusBar): o tempo à vista,
+    // nada competindo pela atenção. Volta sozinha quando a sessão termina.
+
+    private FocusBar focusBar;
+
+    private boolean pomodoroActive() {
+        return countdownTimer != null && (countdownTimer.isRunning() || isPaused);
+    }
+
+    /** force = pedido explícito ("Modo foco" no cartão Agora), vale mesmo com o ajuste desligado. */
+    private void enterFocusMode(boolean force) {
+        if ((!setFocusMode && !force) || focusBar != null || !sessionInProgress()) return;
+        focusBar = new FocusBar(new FocusBar.Actions() {
+            public void togglePause() { focusTogglePause(); }
+            public void finish()      { focusFinish(); }
+            public void expand()      { exitFocusMode(); }
+        });
+        refreshFocusBar();
+        focusBar.setVisible(true);
+        setVisible(false);
+    }
+
+    private void exitFocusMode() {
+        if (focusBar == null) return;
+        focusBar.dispose();
+        focusBar = null;
+        setVisible(true);
+        setState(Frame.NORMAL);
+        toFront();
+        refreshNowCard();
+    }
+
+    private void focusTogglePause() {
+        if (pomodoroActive()) togglePauseCountdown();
+        else                  toggleStopwatch();
+    }
+
+    private void focusFinish() {
+        if (pomodoroActive()) {
+            if (!wasFocusSession) { stopCountdown(false); return; }   // encerrar a pausa não perde nada
+            int r = JOptionPane.showConfirmDialog(dialogOwner(),
+                    "Parar este bloco agora? O tempo dele não é salvo.\n"
+                  + "(Para salvar o tempo, use o cronômetro em vez do Pomodoro.)",
+                    "Parar Pomodoro", JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE);
+            if (r == JOptionPane.YES_OPTION) stopCountdown(false);
+        } else {
+            if (stopwatch.isRunning()) stopStopwatch();   // conta como no "Salvar Tempo": pausa e salva
+            submitStopwatchTime();
+        }
+    }
+
+    /** Diálogos durante o modo foco aparecem junto da faixa (a janela principal está escondida). */
+    private Component dialogOwner() {
+        return focusBar != null ? focusBar : this;
+    }
+
+    private void refreshFocusBar() {
+        if (focusBar == null) return;
+        String area = (String) subjectComboBox.getSelectedItem();
+        StudyData sd = area == null ? null : studyDataMap.get(area);
+        Color cor = sd != null ? sd.getColor() : AppTheme.ACCENT;
+        String nome = area == null ? "" : area;
+        Object sf = kindCombo == null ? null : kindCombo.getSelectedItem();
+        if (sf != null && !"–".equals(sf) && !KIND_MANAGE.equals(sf)) nome += " · " + sf;
+
+        boolean pomo = pomodoroActive(), pausado;
+        int correndo;   // minutos da sessão atual, ainda não salvos
+        String tempo, status, fim;
+        if (pomo) {
+            pausado = isPaused;
+            int r = Math.max(0, countdownSecondsRemaining);
+            tempo = String.format("%02d:%02d", r / 60, r % 60);
+            fim = "Parar";
+            if (!wasFocusSession) {
+                nome = "Pausa do Pomodoro"; cor = AppTheme.ACCENT; correndo = 0; area = null;
+                status = pausado ? "pausado" : "levanta, água, respira";
+            } else {
+                correndo = Math.max(0, plannedMinutes * 60 - r) / 60;
+                status = pausado ? "pausado" : "Pomodoro · " + (pomoCycleFocos + 1) + "º foco";
+            }
+        } else {
+            pausado = !stopwatch.isRunning();
+            int e = elapsedSeconds;
+            tempo = String.format("%02d:%02d:%02d", e / 3600, (e % 3600) / 60, e % 60);
+            correndo = e / 60;
+            status = pausado ? "pausado" : "contando";
+            fim = "Terminar";
+        }
+
+        double frac = -1;
+        int ideal = area == null ? 0 : goals.getOrDefault(area, 0);
+        if (ideal > 0 && isGoalDay(area, LocalDate.now())) {
+            int feito = minutesOnDay(area, LocalDate.now()) + correndo;
+            frac = feito / (double) ideal;
+            status += "  ·  " + fmtHM(feito) + " de " + fmtHM(ideal) + " hoje";
+        }
+        focusBar.update(nome, cor, tempo, status, pausado, frac, fim);
     }
 
     // ── POMODORO ────────────────────────────────────────────────────────────
@@ -2416,6 +2551,8 @@ public class StudyTracker extends JFrame {
         stopCountdownButton.setText("Pausar");
         resetButton.setEnabled(true);
         subjectComboBox.setEnabled(false);
+        refreshNowCard();
+        refreshFocusBar();
     }
 
     private void stopCountdown(boolean finished) {
@@ -2443,7 +2580,8 @@ public class StudyTracker extends JFrame {
                     if (startCountdownIfPossible(true)) return;
                 }
             } else {
-                if (didFocus) showInfoDialog("✅ Foco concluído!",
+                exitFocusMode();   // o aviso de fim aparece com o app aberto
+                if (didFocus) showInfoDialog("Foco concluído",
                         plannedMinutes + " min adicionados a " + subject + ".");
                 else          showInfoDialog("Pausa concluída", "Pronto para mais uma sessão?");
             }
@@ -2460,6 +2598,8 @@ public class StudyTracker extends JFrame {
         stopCountdownButton.setText("Pausar");
         resetButton.setEnabled(false);
         subjectComboBox.setEnabled(true);
+        if (!sessionInProgress()) exitFocusMode();
+        refreshNowCard();
     }
 
     /** Tenta iniciar o foco no ciclo automático; devolve false se não deu (ex.: sem matéria). */
@@ -2486,6 +2626,7 @@ public class StudyTracker extends JFrame {
             statusLabel.setText("Pausado");
             statusLabel.setForeground(AppTheme.WARNING);
         }
+        refreshFocusBar();
     }
 
     private void updateCountdownLabel() {
@@ -2541,9 +2682,9 @@ public class StudyTracker extends JFrame {
         final String msg;
         int alvo = dailyMinFor(subject);   // celebra ao bater o MÍNIMO
         if (before < alvo && after >= alvo) {
-            msg = "🎯 Você bateu a meta de " + subject + " hoje!  (" + fmtHM(after) + ")";
+            msg = "Você bateu a meta de " + subject + " hoje!  (" + fmtHM(after) + ")";
         } else if (!isHardDay(LocalDate.now()) && after < alvo && alvo - after <= 15) {
-            msg = "Faltam " + (alvo - after) + " min para a meta de " + subject + " hoje 💪";
+            msg = "Faltam " + (alvo - after) + " min para a meta de " + subject + " hoje.";
         } else {
             return;
         }
@@ -2669,7 +2810,7 @@ public class StudyTracker extends JFrame {
     /** Selo do marco para exibir na linha de sequência. */
     private static String streakBadge(int streak) {
         int mk = streakMilestone(streak);
-        return mk == 0 ? "" : mk >= 365 ? "  🏆" : mk >= 100 ? "  🥇" : mk >= 30 ? "  🥈" : "  🥉";
+        return mk == 0 ? "" : "  · marco de " + mk;
     }
 
     /** Melhor sequência registrada (recorde). subject == null ⇒ geral. */
@@ -2689,7 +2830,7 @@ public class StudyTracker extends JFrame {
         if (mk > celebratedStreakMilestone) {
             celebratedStreakMilestone = mk;
             if (ready) {
-                Timer t = new Timer(400, e -> toast("🎉 " + mk + " dias de sequência! Continue assim."));
+                Timer t = new Timer(400, e -> toast(mk + " dias de sequência! Continue assim."));
                 t.setRepeats(false); t.start();
             }
         }
@@ -3105,8 +3246,7 @@ public class StudyTracker extends JFrame {
 
     /** Tem sessão em andamento (cronômetro com tempo ou Pomodoro rodando)? */
     private boolean sessionInProgress() {
-        return elapsedSeconds > 0 || (stopwatch != null && stopwatch.isRunning())
-            || (countdownTimer != null && countdownTimer.isRunning());
+        return elapsedSeconds > 0 || (stopwatch != null && stopwatch.isRunning()) || pomodoroActive();
     }
 
     /** Seleciona a área no combo só se não houver sessão contando: senão o tempo iria para a área errada. */
@@ -3331,7 +3471,7 @@ public class StudyTracker extends JFrame {
         // Volta os ajustes ao padrão: um backup sem alguma chave não pode herdar o valor antigo.
         setMinFocusMin = 1; setIdleMinutes = 10; setPomoAutoCycle = false;
         setReminderHour = -1; setTransitionMin = 5; setHyperfocusH = 3;
-        setUpdateCheck = true; updateCheckedDay = null;
+        setUpdateCheck = true; updateCheckedDay = null; setFocusMode = true;
         weeklySummaryShownWeek = null; reminderShownDay = null; balanceNudgeWeek = null;
         loadOk = true;
 
@@ -3391,6 +3531,15 @@ public class StudyTracker extends JFrame {
         c.gridx = 0; c.gridy = row++; c.gridwidth = 2;
         panel.add(dlgHint("Se não tiver estudado até essa hora, o app avisa (notificação do Windows)."), c);
 
+        JCheckBox cbFocus = new JCheckBox("Ao começar uma sessão, recolher a janela numa faixa pequena", setFocusMode);
+        cbFocus.setOpaque(false);
+        c.gridx = 0; c.gridy = row++; c.gridwidth = 2; c.insets = new Insets(12, 4, 2, 4);
+        panel.add(dlgLabel("Modo foco", true), c);
+        c.gridy = row++; c.insets = new Insets(2, 4, 4, 4);
+        panel.add(cbFocus, c);
+        c.gridy = row++; c.insets = new Insets(0, 4, 4, 4);
+        panel.add(dlgHint("A faixa fica por cima das outras janelas, com o tempo e a meta de hoje. \"Abrir app\" volta para a tela cheia."), c);
+
         c.gridx = 0; c.gridy = row++; c.gridwidth = 2; c.insets = new Insets(12, 4, 2, 4);
         panel.add(dlgLabel("Pomodoro", true), c);
         c.gridy = row++; c.insets = new Insets(2, 4, 4, 4);
@@ -3433,6 +3582,7 @@ public class StudyTracker extends JFrame {
         setTransitionMin = (int) spTrans.getValue();
         setHyperfocusH   = (int) spHyper.getValue();
         setPomoAutoCycle = cbCycle.isSelected();
+        setFocusMode     = cbFocus.isSelected();
         setUpdateCheck   = cbUpdate.isSelected();
         String rem = (String) cbReminder.getSelectedItem();
         setReminderHour = (rem == null || rem.startsWith("Des")) ? -1 : Integer.parseInt(rem.substring(0, 2));
@@ -3444,7 +3594,7 @@ public class StudyTracker extends JFrame {
     // ── TEMA ────────────────────────────────────────────────────────────────
 
     private void toggleTheme() {
-        String[] options = {"☀  Claro", "🌙  Escuro"};
+        String[] options = {"Claro", "Escuro"};
         int current = AppTheme.dark ? 1 : 0;
         int choice = JOptionPane.showOptionDialog(this,
                 "Escolha o tema da interface:",
@@ -3682,6 +3832,7 @@ public class StudyTracker extends JFrame {
         p.setProperty("__transition_min__", String.valueOf(setTransitionMin));
         p.setProperty("__hyperfocus_h__",   String.valueOf(setHyperfocusH));
         p.setProperty("__update_check__",   String.valueOf(setUpdateCheck));
+        p.setProperty("__focus_mode__",     String.valueOf(setFocusMode));
         if (updateCheckedDay != null) p.setProperty("__update_checked_day__", updateCheckedDay);
         if (weeklySummaryShownWeek != null) p.setProperty("__week_summary_shown__", weeklySummaryShownWeek);
         if (reminderShownDay != null)       p.setProperty("__reminder_shown_day__", reminderShownDay);
@@ -3787,6 +3938,10 @@ public class StudyTracker extends JFrame {
                 }
                 if (k.equals("__hyperfocus_h__")) {
                     try { setHyperfocusH = Math.max(0, Integer.parseInt(p.getProperty(k))); } catch (Exception ignored) {}
+                    continue;
+                }
+                if (k.equals("__focus_mode__")) {
+                    setFocusMode = !"false".equalsIgnoreCase(p.getProperty(k));
                     continue;
                 }
                 if (k.equals("__update_check__")) {
@@ -3926,7 +4081,8 @@ public class StudyTracker extends JFrame {
     // ── UTILS ───────────────────────────────────────────────────────────────
 
     private void toast(String msg) {
-        JWindow w = new JWindow(this);
+        Window anchor = focusBar != null ? focusBar : this;   // app recolhido: aparece embaixo da faixa
+        JWindow w = new JWindow(anchor);
         JLabel lbl = new JLabel(msg);
         lbl.setFont(AppTheme.FONT_LABEL);
         lbl.setForeground(Color.WHITE);
@@ -3939,8 +4095,9 @@ public class StudyTracker extends JFrame {
         w.setContentPane(panel);
         w.pack();
 
-        int baseX = getX() + (getWidth() - w.getWidth()) / 2;
-        int endY  = getY() + getHeight() - w.getHeight() - 56;
+        int baseX = anchor.getX() + (anchor.getWidth() - w.getWidth()) / 2;
+        int endY  = focusBar != null ? anchor.getY() + anchor.getHeight() + 10
+                                     : getY() + getHeight() - w.getHeight() - 56;
         int slide = 18;
 
         try { w.setOpacity(0f); } catch (Exception ignored) {}
@@ -4076,7 +4233,10 @@ public class StudyTracker extends JFrame {
             try {
                 trayIcon = new java.awt.TrayIcon(AppTheme.appIcon(16), "FocaEstudo");
                 trayIcon.setImageAutoSize(true);
-                trayIcon.addActionListener(e -> { setVisible(true); setState(Frame.NORMAL); toFront(); });
+                trayIcon.addActionListener(e -> {
+                    if (focusBar != null) { exitFocusMode(); return; }
+                    setVisible(true); setState(Frame.NORMAL); toFront();
+                });
                 java.awt.SystemTray.getSystemTray().add(trayIcon);
             } catch (Exception e) { trayIcon = null; }
         }
@@ -4149,7 +4309,7 @@ public class StudyTracker extends JFrame {
             sb.append("• vs. semana anterior: ")
               .append(d >= 0 ? "▲ +" + fmtHM(d) : "▼ " + fmtHM(-d)).append('\n');
         }
-        sb.append("\nBora manter o ritmo! 💪");
+        sb.append("\nBora manter o ritmo!");
 
         JOptionPane.showMessageDialog(this, sb.toString(),
                 "Resumo da semana", JOptionPane.INFORMATION_MESSAGE);
@@ -4164,7 +4324,7 @@ public class StudyTracker extends JFrame {
         JLabel ic = new JLabel(new ImageIcon(AppTheme.appIcon(48)));
         c.gridy = 0; c.insets = new Insets(0, 0, 10, 0); panel.add(ic, c);
 
-        JLabel h1 = new JLabel("Bem-vindo ao FocaEstudo 👋");
+        JLabel h1 = new JLabel("Bem-vindo ao FocaEstudo");
         h1.setFont(AppTheme.FONT_SECTION);
         c.gridy = 1; c.insets = new Insets(0, 0, 4, 0); panel.add(h1, c);
 
