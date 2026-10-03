@@ -298,58 +298,261 @@ public class StudyTracker extends JFrame {
 
     // ── BUILD UI ────────────────────────────────────────────────────────────
 
+    // A janela é uma barra lateral + uma tela por vez (Hoje, Semana, Progresso, Áreas).
+    // Antes era tudo numa tela só: o cronômetro dominava e os cartões ficavam espremidos.
+    private static final String SCR_HOJE = "hoje", SCR_SEMANA = "semana",
+                                SCR_PROGRESSO = "progresso", SCR_AREAS = "areas";
+    private SideNav      sideNav;
+    private JPanel       screens;
+    private String       currentScreen = SCR_HOJE;
+    private PlannerPanel weekScreen;
+    private JPanel       areasBody;
+
     private void buildUI() {
-        add(buildTopBar(),    BorderLayout.NORTH);
-        add(buildCenter(),    BorderLayout.CENTER);
-        add(buildBottom(),    BorderLayout.SOUTH);
+        screens = new JPanel(new CardLayout());
+        screens.setBackground(AppTheme.BG);
+        screens.add(buildTodayScreen(),    SCR_HOJE);
+        screens.add(buildWeekScreen(),     SCR_SEMANA);
+        screens.add(buildProgressScreen(), SCR_PROGRESSO);
+        screens.add(buildAreasScreen(),    SCR_AREAS);
+
+        add(buildSideNav(), BorderLayout.WEST);
+        add(screens,        BorderLayout.CENTER);
+        showScreen(currentScreen);
     }
 
-    private JPanel buildTopBar() {
-        JPanel bar = new JPanel(new BorderLayout(12, 0));
-        bar.setBackground(AppTheme.SURFACE);
-        bar.setBorder(new CompoundBorder(
-                BorderFactory.createMatteBorder(0, 0, 1, 0, AppTheme.DIVIDER),
-                new EmptyBorder(12, 20, 12, 16)));
+    private void showScreen(String key) {
+        currentScreen = key;
+        ((CardLayout) screens.getLayout()).show(screens, key);
+        sideNav.select(key);
+    }
 
-        JPanel left = new JPanel(new GridLayout(2, 1, 0, 2));
-        left.setOpaque(false);
-        JLabel title = new JLabel("FocaEstudo");
-        title.setFont(AppTheme.FONT_TITLE);
-        title.setForeground(AppTheme.TEXT_PRI);
-        tvTotal = new JLabel("Total: 0h 00min");
-        tvTotal.setFont(AppTheme.FONT_SMALL);
-        tvTotal.setForeground(AppTheme.TEXT_SEC);
-        left.add(title); left.add(tvTotal);
-
-        JPanel right = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
-        right.setOpaque(false);
-
-        StyledButton btnHistory = new StyledButton("Histórico", StyledButton.Variant.TEXT);
-        btnHistory.addActionListener(e -> showHistory());
-
-        StyledButton btnStats = new StyledButton("Estatísticas", StyledButton.Variant.TEXT);
-        btnStats.addActionListener(e -> new StatsPanel(this, sessions, studyDataMap).setVisible(true));
-
-        StyledButton btnTasks = new StyledButton("Tarefas", StyledButton.Variant.TEXT);
-        btnTasks.addActionListener(e -> new ChecklistPanel(this, checklist, studyDataMap, () -> {
+    private SideNav buildSideNav() {
+        sideNav = new SideNav("FocaEstudo");
+        tvTotal = sideNav.subtitle();
+        sideNav.addScreen(SCR_HOJE,      "Hoje",      () -> showScreen(SCR_HOJE));
+        sideNav.addScreen(SCR_SEMANA,    "Semana",    () -> showScreen(SCR_SEMANA));
+        sideNav.addScreen(SCR_PROGRESSO, "Progresso", () -> showScreen(SCR_PROGRESSO));
+        sideNav.addScreen(SCR_AREAS,     "Áreas",     () -> showScreen(SCR_AREAS));
+        sideNav.addAction("Tarefas", () -> new ChecklistPanel(this, checklist, studyDataMap, () -> {
             saveChecklist(); refreshProgressCard();
         }).setVisible(true));
+        sideNav.addAction("Ajustes", this::showSettingsDialog);
+        sideNav.addAction("Tema",    this::toggleTheme);
+        return sideNav;
+    }
 
-        StyledButton btnSettings = new StyledButton("Ajustes", StyledButton.Variant.TEXT);
-        btnSettings.addActionListener(e -> showSettingsDialog());
+    /** Cabeçalho das telas: título + dica + botões à direita (opcionais). */
+    private JPanel screenHeader(String title, String hint, JComponent... actions) {
+        JPanel h = new JPanel(new BorderLayout(12, 0));
+        h.setBackground(AppTheme.SURFACE);
+        h.setBorder(new CompoundBorder(
+                BorderFactory.createMatteBorder(0, 0, 1, 0, AppTheme.DIVIDER),
+                new EmptyBorder(12, 16, 12, 16)));
+        JPanel txt = new JPanel(new GridLayout(hint != null ? 2 : 1, 1, 0, 2));
+        txt.setOpaque(false);
+        JLabel t = new JLabel(title);
+        t.setFont(AppTheme.FONT_SECTION); t.setForeground(AppTheme.TEXT_PRI);
+        txt.add(t);
+        if (hint != null) {
+            JLabel l = new JLabel(hint);
+            l.setFont(AppTheme.FONT_SMALL); l.setForeground(AppTheme.TEXT_SEC);
+            txt.add(l);
+        }
+        JPanel btns = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
+        btns.setOpaque(false);
+        for (JComponent a : actions) btns.add(a);
+        h.add(txt,  BorderLayout.WEST);
+        h.add(btns, BorderLayout.EAST);
+        return h;
+    }
 
-        StyledButton btnTheme = new StyledButton("Tema", StyledButton.Variant.TEXT);
-        btnTheme.addActionListener(e -> toggleTheme());
+    /** Painel que acompanha a largura do scroll (sem rolagem horizontal). */
+    private static class ScrollBody extends JPanel implements Scrollable {
+        ScrollBody(LayoutManager lm) { super(lm); setOpaque(false); }
+        public Dimension getPreferredScrollableViewportSize() { return getPreferredSize(); }
+        public int getScrollableUnitIncrement(Rectangle r, int o, int d) { return 16; }
+        public int getScrollableBlockIncrement(Rectangle r, int o, int d) { return r.height - 32; }
+        public boolean getScrollableTracksViewportWidth()  { return true; }
+        public boolean getScrollableTracksViewportHeight() { return false; }
+    }
 
-        right.add(btnHistory);
-        right.add(btnStats);
-        right.add(btnTasks);
-        right.add(btnSettings);
-        right.add(btnTheme);
+    private static JScrollPane quietScroll(JComponent body) {
+        JScrollPane sp = new JScrollPane(body,
+                JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED, JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+        sp.setBorder(null);
+        sp.setOpaque(false);
+        sp.getViewport().setOpaque(false);
+        sp.getVerticalScrollBar().setUnitIncrement(16);
+        return sp;
+    }
 
-        bar.add(left,  BorderLayout.WEST);
-        bar.add(right, BorderLayout.EAST);
-        return bar;
+    // ── TELA HOJE: o que fazer agora + cronômetro ──────────────────────────
+
+    private JPanel buildTodayScreen() {
+        // Duas colunas: plano do dia e sugestão à esquerda; metas e equilíbrio à direita.
+        ScrollBody cols = new ScrollBody(new GridLayout(1, 2, 12, 0));
+        cols.setBorder(new EmptyBorder(12, 12, 12, 12));
+        cols.add(cardColumn(buildTodayCard(), buildNowCard()));
+        cols.add(cardColumn(buildGoalsCard(), buildBalanceCard()));
+
+        JPanel p = new JPanel(new BorderLayout());
+        p.setBackground(AppTheme.BG);
+        p.add(quietScroll(cols), BorderLayout.CENTER);
+        p.add(buildBottom(),     BorderLayout.SOUTH);
+        return p;
+    }
+
+    /** Cartões empilhados no topo da coluna, cada um na sua altura (sem esticar para igualar a vizinha). */
+    private static JPanel cardColumn(JComponent... cards) {
+        JPanel col = new JPanel(new GridBagLayout());
+        col.setOpaque(false);
+        GridBagConstraints c = new GridBagConstraints();
+        c.gridx = 0; c.weightx = 1; c.fill = GridBagConstraints.HORIZONTAL;
+        c.anchor = GridBagConstraints.NORTH;
+        for (int i = 0; i < cards.length; i++) {
+            c.gridy = i;
+            c.insets = new Insets(i > 0 ? 12 : 0, 0, 0, 0);
+            col.add(cards[i], c);
+        }
+        c.gridy = cards.length; c.weighty = 1; c.insets = new Insets(0, 0, 0, 0);
+        col.add(Box.createGlue(), c);   // sobra de altura vai para cá
+        return col;
+    }
+
+    // ── TELA SEMANA: a grade inteira, sempre à mão ─────────────────────────
+
+    private JComponent buildWeekScreen() {
+        weekScreen = new PlannerPanel(activeAreas(), areaColors(), weekPlan,
+                this::onPlanChanged, this::fillPlanFromGoals);
+        return weekScreen;
+    }
+
+    private List<String> activeAreas() {
+        List<String> areas = new ArrayList<>();
+        for (String s : studyDataMap.keySet()) if (!archived.contains(s)) areas.add(s);
+        return areas;
+    }
+
+    private Map<String, Color> areaColors() {
+        Map<String, Color> colorMap = new LinkedHashMap<>();
+        studyDataMap.forEach((k, v) -> colorMap.put(k, v.getColor()));
+        return colorMap;
+    }
+
+    // ── TELA ÁREAS: criar, editar, arquivar e deletar ──────────────────────
+    // Esses botões ficavam sempre à vista embaixo do cronômetro (com o "Deletar" vermelho a
+    // um clique). Aqui cada área tem os seus, e mexer numa área não troca a do cronômetro.
+
+    private JPanel buildAreasScreen() {
+        StyledButton add = new StyledButton("+ Área", StyledButton.Variant.FILLED);
+        add.addActionListener(e -> addNewSubject());
+        areasBody = new ScrollBody(null);
+        areasBody.setLayout(new BoxLayout(areasBody, BoxLayout.Y_AXIS));
+        areasBody.setBorder(new EmptyBorder(12, 16, 16, 16));
+
+        JPanel p = new JPanel(new BorderLayout());
+        p.setBackground(AppTheme.BG);
+        p.add(screenHeader("Áreas", "Suas áreas da vida, por tipo. O histórico de cada uma fica guardado.", add),
+                BorderLayout.NORTH);
+        p.add(quietScroll(areasBody), BorderLayout.CENTER);
+        return p;
+    }
+
+    private void refreshAreasScreen() {
+        if (areasBody == null) return;
+        areasBody.removeAll();
+        for (int t = 0; t < TYPE_KEYS.length; t++) {
+            List<String> doTipo = new ArrayList<>();
+            for (String s : studyDataMap.keySet())
+                if (!archived.contains(s) && typeOf(s).equals(TYPE_KEYS[t])) doTipo.add(s);
+            if (doTipo.isEmpty()) continue;
+            areasBody.add(areasSection(TYPE_LABELS[t]));
+            for (String s : doTipo) areasBody.add(areaRow(s, false));
+        }
+        if (!archived.isEmpty()) {
+            areasBody.add(areasSection("Arquivadas"));
+            for (String s : archived) if (studyDataMap.containsKey(s)) areasBody.add(areaRow(s, true));
+        }
+        areasBody.revalidate();
+        areasBody.repaint();
+    }
+
+    private JComponent areasSection(String label) {
+        JLabel l = new JLabel(label);
+        l.setFont(AppTheme.FONT_BOLD);
+        l.setForeground(AppTheme.TEXT_SEC);
+        l.setBorder(new EmptyBorder(areasBody.getComponentCount() == 0 ? 0 : 14, 4, 6, 0));
+        l.setAlignmentX(Component.LEFT_ALIGNMENT);
+        return l;
+    }
+
+    private JComponent areaRow(String area, boolean arquivada) {
+        StudyData sd = studyDataMap.get(area);
+        RoundedPanel row = new RoundedPanel(12, AppTheme.SURFACE);
+        row.setLayout(new GridBagLayout());   // nome e botões centralizados na mesma linha
+        row.setBorder(new EmptyBorder(4, 12, 4, 8));
+        row.setAlignmentX(Component.LEFT_ALIGNMENT);
+        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 46));
+
+        JLabel nome = new JLabel(area, PlannerPanel.dot(sd.getColor()), SwingConstants.LEFT);
+        nome.setIconTextGap(8);
+        nome.setFont(AppTheme.FONT_LABEL);
+        nome.setForeground(arquivada ? AppTheme.TEXT_SEC : AppTheme.TEXT_PRI);
+        JLabel total = new JLabel(fmtHM(sd.getMinutes()));
+        total.setFont(AppTheme.FONT_SMALL);
+        total.setForeground(AppTheme.TEXT_SEC);
+        JPanel left = new JPanel(new FlowLayout(FlowLayout.LEFT, 12, 0));
+        left.setOpaque(false);
+        left.add(nome); left.add(total);
+
+        JPanel btns = new JPanel(new FlowLayout(FlowLayout.RIGHT, 2, 0));
+        btns.setOpaque(false);
+        if (arquivada) {
+            btns.add(smallBtn("Reativar", StyledButton.Variant.TEXT, () -> unarchiveSubject(area)));
+        } else {
+            btns.add(smallBtn("Editar",   StyledButton.Variant.TEXT, () -> editSubjectName(area)));
+            btns.add(smallBtn("Cor",      StyledButton.Variant.TEXT, () -> changeSubjectColor(area)));
+            btns.add(smallBtn("Zerar",    StyledButton.Variant.TEXT, () -> zeroOutSubjectTime(area)));
+            btns.add(smallBtn("Arquivar", StyledButton.Variant.TEXT, () -> archiveSubject(area)));
+        }
+        btns.add(smallBtn("Deletar", StyledButton.Variant.TEXT, () -> deleteSubject(area)));
+
+        GridBagConstraints c = new GridBagConstraints();
+        c.gridy = 0; c.anchor = GridBagConstraints.WEST;
+        c.gridx = 0; c.weightx = 1; row.add(left, c);
+        c.gridx = 1; c.weightx = 0; row.add(btns, c);
+
+        JPanel wrap = new JPanel(new BorderLayout());   // espaço entre as linhas
+        wrap.setOpaque(false);
+        wrap.setBorder(new EmptyBorder(0, 0, 6, 0));
+        wrap.setAlignmentX(Component.LEFT_ALIGNMENT);
+        wrap.setMaximumSize(new Dimension(Integer.MAX_VALUE, 52));
+        wrap.add(row);
+        return wrap;
+    }
+
+    private static StyledButton smallBtn(String text, StyledButton.Variant v, Runnable r) {
+        StyledButton b = new StyledButton(text, v);
+        b.setFont(AppTheme.FONT_SMALL);
+        b.setBorder(BorderFactory.createEmptyBorder(4, 10, 4, 10));
+        b.addActionListener(e -> r.run());
+        return b;
+    }
+
+    // ── TELA PROGRESSO: donut, números e calendário ────────────────────────
+
+    private JPanel buildProgressScreen() {
+        StyledButton hist = new StyledButton("Histórico", StyledButton.Variant.TEXT);
+        hist.addActionListener(e -> showHistory());
+        StyledButton stats = new StyledButton("Estatísticas", StyledButton.Variant.TEXT);
+        stats.addActionListener(e -> new StatsPanel(this, sessions, studyDataMap).setVisible(true));
+
+        JPanel p = new JPanel(new BorderLayout());
+        p.setBackground(AppTheme.BG);
+        p.add(screenHeader("Progresso", null, hist, stats), BorderLayout.NORTH);
+        p.add(buildCenter(), BorderLayout.CENTER);
+        return p;
     }
 
     private JSplitPane buildCenter() {
@@ -370,20 +573,8 @@ public class StudyTracker extends JFrame {
         JPanel leftBottom = new JPanel();
         leftBottom.setLayout(new BoxLayout(leftBottom, BoxLayout.Y_AXIS));
         leftBottom.setOpaque(false);
-        // "Hoje" no topo: o plano do dia fica à vista em vez de escondido numa janela.
-        JComponent tc = buildTodayCard();    tc.setAlignmentX(Component.LEFT_ALIGNMENT);
-        JComponent nc = buildNowCard();      nc.setAlignmentX(Component.LEFT_ALIGNMENT);
-        JComponent bc = buildBalanceCard();  bc.setAlignmentX(Component.LEFT_ALIGNMENT);
-        JComponent gc = buildGoalsCard();    gc.setAlignmentX(Component.LEFT_ALIGNMENT);
+        // Hoje, Agora, Metas e Equilíbrio foram para a tela Hoje; aqui fica só o Progresso.
         JComponent pc = buildProgressCard(); pc.setAlignmentX(Component.LEFT_ALIGNMENT);
-        leftBottom.add(tc);
-        leftBottom.add(Box.createVerticalStrut(12));
-        leftBottom.add(nc);
-        leftBottom.add(Box.createVerticalStrut(12));
-        leftBottom.add(bc);
-        leftBottom.add(Box.createVerticalStrut(12));
-        leftBottom.add(gc);
-        leftBottom.add(Box.createVerticalStrut(12));
         leftBottom.add(pc);
         leftBottom.add(Box.createVerticalGlue());
 
@@ -458,13 +649,12 @@ public class StudyTracker extends JFrame {
         // Tabs customizadas (sem fundo branco do JTabbedPane)
         CustomTabs tabs = new CustomTabs();
         bottomTabs = tabs;
-        tabs.addTab("⏱  Cronômetro",       buildStopwatchTab());
-        tabs.addTab("✏  Manual",           buildManualTab());
-        tabs.addTab("🍅  Pomodoro",         buildPomodoroTab());
+        // Sem ⏱ ✏ 🍅: a fonte do Swing no Windows mostra esses glifos como quadrados.
+        tabs.addTab("Cronômetro", buildStopwatchTab());
+        tabs.addTab("Manual",     buildManualTab());
+        tabs.addTab("Pomodoro",   buildPomodoroTab());
         tabs.setPreferredSize(new Dimension(0, 175));
         card.add(tabs, BorderLayout.CENTER);
-
-        card.add(buildManagementRow(), BorderLayout.SOUTH);
 
         outer.add(card);
         return outer;
@@ -619,7 +809,9 @@ public class StudyTracker extends JFrame {
             JPanel txt = new JPanel();
             txt.setLayout(new BoxLayout(txt, BoxLayout.Y_AXIS));
             txt.setOpaque(false);
-            JLabel nm = new JLabel(typeIcon(typeOf(sug[0])) + "  " + sug[0]);
+            StudyData sd = studyDataMap.get(sug[0]);   // bolinha da cor no lugar do emoji (vira quadrado no Windows)
+            JLabel nm = new JLabel(sug[0], PlannerPanel.dot(sd != null ? sd.getColor() : AppTheme.ACCENT), SwingConstants.LEFT);
+            nm.setIconTextGap(6);
             nm.setFont(AppTheme.FONT_BOLD); nm.setForeground(AppTheme.TEXT_PRI);
             nm.setAlignmentX(Component.LEFT_ALIGNMENT);
             JLabel rs = new JLabel(sug[1]);
@@ -627,13 +819,16 @@ public class StudyTracker extends JFrame {
             rs.setAlignmentX(Component.LEFT_ALIGNMENT);
             txt.add(nm); txt.add(Box.createVerticalStrut(2)); txt.add(rs);
 
-            StyledButton go = new StyledButton("▶ Começar", StyledButton.Variant.FILLED);
+            StyledButton go = new StyledButton("Começar", StyledButton.Variant.FILLED);
             go.setFont(AppTheme.FONT_SMALL);
             final String area = sug[0];
             final String sf = sug.length > 2 ? sug[2] : null;
             go.addActionListener(e -> startArea(area, sf));
-            nowBody.add(txt, BorderLayout.CENTER);
-            nowBody.add(go,  BorderLayout.EAST);
+            JPanel goWrap = new JPanel(new FlowLayout(FlowLayout.RIGHT, 0, 0));   // não estica na altura
+            goWrap.setOpaque(false);
+            goWrap.add(go);
+            nowBody.add(txt,    BorderLayout.CENTER);
+            nowBody.add(goWrap, BorderLayout.EAST);
         }
         nowBody.revalidate();
         nowBody.repaint();
@@ -643,6 +838,7 @@ public class StudyTracker extends JFrame {
     private void startArea(String area, String subFoco) {
         subjectComboBox.setSelectedItem(area);        // dispara refreshKindCombo
         if (subFoco != null && kindCombo != null) kindCombo.setSelectedItem(subFoco);
+        showScreen(SCR_HOJE);                           // o cronômetro fica na tela Hoje
         if (bottomTabs != null) bottomTabs.select(0);   // aba Cronômetro
         startStopwatch();
     }
@@ -1047,29 +1243,21 @@ public class StudyTracker extends JFrame {
     }
 
     // ── Semana planejada + cartão "Hoje" ─────────────────────────────────────
-    // O plano do dia fica na tela principal (externalizar o "o que vem agora"); a grade da
-    // semana inteira é só para editar, aberta pelo "editar semana" do cartão.
+    // O plano do dia fica na tela Hoje (externalizar o "o que vem agora"); a grade da
+    // semana inteira é a tela Semana, aberta pela barra lateral ou pelo "editar semana".
 
-    private PlannerPanel plannerWindow;
     private JPanel  todayBody;
     private JLabel  todayTitle;
     private String  todayShownKey;   // "<data>_<turno>" desenhado: o timer só redesenha quando muda
     private Timer   todayTimer;
 
     private void openPlanner() {
-        // Sempre recria: a janela guarda a lista e as cores das áreas de quando foi aberta.
-        if (plannerWindow != null) plannerWindow.dispose();
-        List<String> areas = new ArrayList<>();
-        for (String s : studyDataMap.keySet()) if (!archived.contains(s)) areas.add(s);
-        Map<String, Color> colorMap = new LinkedHashMap<>();
-        studyDataMap.forEach((k, v) -> colorMap.put(k, v.getColor()));
-        plannerWindow = new PlannerPanel(this, areas, colorMap, weekPlan,
-                this::onPlanChanged, this::fillPlanFromGoals);
-        plannerWindow.setVisible(true);
+        showScreen(SCR_SEMANA);
     }
 
     private void onPlanChanged() {
         saveData();
+        if (weekScreen != null) weekScreen.rebuild();   // a mudança pode vir do cartão Hoje
         refreshTodayCard();
         refreshNowCard();
     }
@@ -1099,10 +1287,9 @@ public class StudyTracker extends JFrame {
      * (mantém tudo) ou recomeça do zero pelas metas (útil quando os dias da meta mudaram).
      */
     private void fillPlanFromGoals() {
-        Component parent = plannerWindow != null && plannerWindow.isVisible() ? plannerWindow : this;
         if (!weekPlan.isEmpty()) {
             Object[] opts = {"Completar", "Refazer do zero", "Cancelar"};
-            int r = JOptionPane.showOptionDialog(parent,
+            int r = JOptionPane.showOptionDialog(this,
                     "Sua semana já tem áreas.\n\n"
                   + "Completar: mantém o que está lá e só adiciona o que falta pelas metas.\n"
                   + "Refazer do zero: apaga a semana e monta de novo só pelas metas.",
@@ -1641,29 +1828,6 @@ public class StudyTracker extends JFrame {
         if (stored > 0) return stored;
         int daily = goals.getOrDefault(subject, 0);
         return daily > 0 ? daily * scheduledDaysInMonth(subject, LocalDate.now()) : 0;
-    }
-
-    private JPanel buildManagementRow() {
-        JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
-        row.setOpaque(false);
-        row.setBorder(new EmptyBorder(8, 0, 0, 0));
-
-        StyledButton btnAdd    = new StyledButton("+ Área",  StyledButton.Variant.TONAL);
-        StyledButton btnEdit   = new StyledButton("Editar área",   StyledButton.Variant.OUTLINED);
-        StyledButton btnColor  = new StyledButton("Cor",        StyledButton.Variant.OUTLINED);
-        StyledButton btnZero   = new StyledButton("Zerar matéria", StyledButton.Variant.OUTLINED);
-        StyledButton btnArch   = new StyledButton("Arquivar",   StyledButton.Variant.OUTLINED);
-        StyledButton btnDelete = new StyledButton("Deletar",    StyledButton.Variant.DANGER);
-
-        btnAdd.addActionListener(e    -> addNewSubject());
-        btnEdit.addActionListener(e   -> editSubjectName());
-        btnColor.addActionListener(e  -> changeSubjectColor());
-        btnZero.addActionListener(e   -> zeroOutSubjectTime());
-        btnArch.addActionListener(e   -> archiveSubject());
-        btnDelete.addActionListener(e -> deleteSubject());
-
-        for (StyledButton b : new StyledButton[]{btnAdd, btnEdit, btnColor, btnZero, btnArch, btnDelete}) row.add(b);
-        return row;
     }
 
     // ── TABS ────────────────────────────────────────────────────────────────
@@ -2647,14 +2811,37 @@ public class StudyTracker extends JFrame {
         if (name.isEmpty()) return;
         String type = TYPE_KEYS[Math.max(0, cbType.getSelectedIndex())];
 
-        if (archived.remove(name)) {                       // era arquivada → desarquiva
-            refreshCombo(); subjectComboBox.setSelectedItem(name); updateUI();
-            toast("\"" + name + "\" desarquivada."); return;
-        }
+        if (archived.contains(name)) { unarchiveSubject(name); return; }   // era arquivada → desarquiva
         if (studyDataMap.containsKey(name)) { toast("Essa área já existe!"); return; }
         studyDataMap.put(name, new StudyData(0, AppTheme.nextColor(studyDataMap.size())));
         if (!"estudo".equals(type)) areaType.put(name, type);
-        refreshCombo(); subjectComboBox.setSelectedItem(name); updateUI();
+        refreshCombo(); selectIfIdle(name); updateUI();
+    }
+
+    private void unarchiveSubject(String name) {
+        if (!archived.remove(name)) return;
+        refreshCombo(); selectIfIdle(name); updateUI();
+        toast("\"" + name + "\" desarquivada.");
+    }
+
+    /** Tem sessão em andamento (cronômetro com tempo ou Pomodoro rodando)? */
+    private boolean sessionInProgress() {
+        return elapsedSeconds > 0 || (stopwatch != null && stopwatch.isRunning())
+            || (countdownTimer != null && countdownTimer.isRunning());
+    }
+
+    /** Seleciona a área no combo só se não houver sessão contando: senão o tempo iria para a área errada. */
+    private void selectIfIdle(String area) {
+        if (!sessionInProgress()) subjectComboBox.setSelectedItem(area);
+    }
+
+    /** Arquivar/deletar a área da sessão em andamento faria o tempo ir para outra área. */
+    private boolean blockIfRunning(String area) {
+        if (sessionInProgress() && area.equals(subjectComboBox.getSelectedItem())) {
+            toast("Termine ou zere a sessão de \"" + area + "\" antes.");
+            return true;
+        }
+        return false;
     }
 
     private JComboBox<String> tipoCombo(String selectedKey) {
@@ -2666,8 +2853,9 @@ public class StudyTracker extends JFrame {
         return cb;
     }
 
-    private void editSubjectName() {
-        String old = (String) subjectComboBox.getSelectedItem(); if (old == null) return;
+    private void editSubjectName(String old) {
+        if (old == null || !studyDataMap.containsKey(old)) return;
+        Object cur = subjectComboBox.getSelectedItem();   // a área do cronômetro não muda
 
         JTextField fName = new JTextField(old, 18);
         JComboBox<String> cbType = tipoCombo(typeOf(old));
@@ -2684,7 +2872,7 @@ public class StudyTracker extends JFrame {
         if ("estudo".equals(novoTipo)) areaType.remove(old); else areaType.put(old, novoTipo);
 
         String nw = AppTheme.semHtml(fName.getText().replace('|', '/').trim());
-        if (nw.isEmpty() || nw.equals(old)) { refreshCombo(); subjectComboBox.setSelectedItem(old); updateUI(); return; }
+        if (nw.isEmpty() || nw.equals(old)) { refreshCombo(); subjectComboBox.setSelectedItem(cur); updateUI(); return; }
         if (studyDataMap.containsKey(nw)) { toast("Esse nome já existe!"); return; }
         StudyData d = studyDataMap.remove(old);
         // Reconstrói mantendo ordem
@@ -2707,17 +2895,17 @@ public class StudyTracker extends JFrame {
         weekPlan.values().forEach(l -> l.replaceAll(a -> old.equals(a) ? nw : a));
         for (ChecklistItem it : checklist) if (it.subject.equals(old)) it.subject = nw;
         if (examDate.containsKey(old))   { examDate.put(nw, examDate.remove(old)); }
-        refreshCombo(); subjectComboBox.setSelectedItem(nw); saveChecklist(); updateUI();
+        refreshCombo(); subjectComboBox.setSelectedItem(old.equals(cur) ? nw : cur); saveChecklist(); updateUI();
     }
 
-    private void changeSubjectColor() {
-        String s = (String) subjectComboBox.getSelectedItem(); if (s == null) return;
+    private void changeSubjectColor(String s) {
+        if (s == null || !studyDataMap.containsKey(s)) return;
         Color c = JColorChooser.showDialog(this, "Cor de " + s, studyDataMap.get(s).getColor());
         if (c != null) { studyDataMap.get(s).setColor(c); updateUI(); }
     }
 
-    private void zeroOutSubjectTime() {
-        String s = (String) subjectComboBox.getSelectedItem(); if (s == null) return;
+    private void zeroOutSubjectTime(String s) {
+        if (s == null || !studyDataMap.containsKey(s)) return;
         int mins = studyDataMap.get(s).getMinutes();
         int r = JOptionPane.showConfirmDialog(this,
                 "Isto zera TODO o tempo acumulado de \"" + s + "\" (" + fmtHM(mins) + ").\n"
@@ -2727,14 +2915,13 @@ public class StudyTracker extends JFrame {
         if (r == JOptionPane.YES_OPTION) { studyDataMap.get(s).setMinutes(0); updateUI(); toast("Tempo de \"" + s + "\" zerado."); }
     }
 
-    private void archiveSubject() {
-        String s = (String) subjectComboBox.getSelectedItem();
-        if (s == null) return;
+    private void archiveSubject(String s) {
+        if (s == null || !studyDataMap.containsKey(s) || blockIfRunning(s)) return;
         long ativas = studyDataMap.keySet().stream().filter(k -> !archived.contains(k)).count();
         if (ativas <= 1) { toast("Deixe ao menos uma matéria ativa."); return; }
         int r = JOptionPane.showConfirmDialog(this,
                 "Arquivar \"" + s + "\"?\nEla sai da lista, mas o tempo e o histórico são mantidos.\n"
-              + "Para reativar, use \"+ Matéria\" e digite o mesmo nome.",
+              + "Para reativar, use \"Reativar\" na tela Áreas.",
                 "Arquivar matéria", JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE);
         if (r != JOptionPane.YES_OPTION) return;
         archived.add(s);
@@ -2742,9 +2929,13 @@ public class StudyTracker extends JFrame {
         toast("\"" + s + "\" arquivada.");
     }
 
-    private void deleteSubject() {
-        String s = (String) subjectComboBox.getSelectedItem(); if (s == null) return;
-        int r = JOptionPane.showConfirmDialog(this, "Deletar \"" + s + "\"? Todo o tempo será perdido.", "Deletar Matéria", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+    private void deleteSubject(String s) {
+        if (s == null || !studyDataMap.containsKey(s) || blockIfRunning(s)) return;
+        if (!archived.contains(s)
+                && studyDataMap.keySet().stream().filter(k -> !archived.contains(k)).count() <= 1) {
+            toast("Deixe ao menos uma área ativa."); return;
+        }
+        int r =JOptionPane.showConfirmDialog(this, "Deletar \"" + s + "\"? Todo o tempo será perdido.", "Deletar Matéria", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
         if (r == JOptionPane.YES_OPTION) { studyDataMap.remove(s); goals.remove(s); goalsMin.remove(s); goalsWeek.remove(s); goalsMonth.remove(s); streakBest.remove(s); goalDays.remove(s); examDate.remove(s); archived.remove(s); areaType.remove(s); subFocos.remove(s); weekPlan.values().forEach(l -> l.remove(s)); weekPlan.values().removeIf(java.util.List::isEmpty); checklist.removeIf(it -> it.subject.equals(s)); saveChecklist(); refreshCombo(); updateUI(); }
     }
 
@@ -2864,8 +3055,6 @@ public class StudyTracker extends JFrame {
         setUpdateCheck = true; updateCheckedDay = null;
         weeklySummaryShownWeek = null; reminderShownDay = null; balanceNudgeWeek = null;
         loadOk = true;
-        // O planejador aberto guarda a lista de áreas antiga.
-        if (plannerWindow != null) { plannerWindow.dispose(); plannerWindow = null; }
 
         ready = false;            // não grava nada enquanto recarrega
         loadData();               // pode trocar o tema (__theme__ do backup)
@@ -3048,6 +3237,8 @@ public class StudyTracker extends JFrame {
         }
         updateGoalProgress();
         refreshStreaks();
+        if (weekScreen != null) weekScreen.setAreas(activeAreas(), areaColors());
+        refreshAreasScreen();
         refreshTodayCard();
         refreshNowCard();
         refreshBalanceCard();
