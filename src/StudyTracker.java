@@ -142,6 +142,7 @@ public class StudyTracker extends JFrame {
     private int     setHyperfocusH   = 3;      // aviso de hiperfoco após N h seguidas; 0 = desligado
     private boolean setUpdateCheck   = true;   // consulta o GitHub (1×/dia) se saiu versão nova
     private boolean setFocusMode     = true;   // ao começar uma sessão, a janela vira a faixa do modo foco
+    private boolean setAskDetails    = true;   // ao terminar, pergunta sub-foco, energia e nota
     private String  updateCheckedDay = null;   // ISO date da última consulta que deu certo
 
     // --- Estado de recorrências ---
@@ -153,15 +154,11 @@ public class StudyTracker extends JFrame {
     // --- Manual ---
     private JTextField hoursField, minutesField;
 
-    // --- Nota + tipo de atividade aplicados à próxima sessão salva ---
-    private JTextField noteField;
-    private JComboBox<String> kindCombo;
-    private JComboBox<String> energyCombo;
-    private static final String[] ENERGY_LABELS = {"–", "😴 baixa", "🙂 ok", "🔥 alta"};
-    private static final String[] ENERGY_ICON   = {"", "😴", "🙂", "🔥"};
+    // --- Detalhes da sessão: perguntados AO TERMINAR, não antes (menos decisões para começar) ---
+    private String pendingSubFoco;   // sub-foco já escolhido (ex.: rodízio do "Agora"); vem marcado no "Como foi?"
+    private static final String[] ENERGY_TEXT = {"", "Baixa", "Ok", "Alta"};
     private static final String[] KIND_LABELS = {"–", "Teoria", "Exercícios", "Revisão", "Outro"};
     private static final String[] KIND_KEYS   = {"", "teoria", "exercicios", "revisao", "outro"};
-    private static final String KIND_MANAGE = "＋ gerenciar sub-focos…";
 
     // Sub-focos por área: tópicos / grupos musculares / hobbies. Ordem preservada.
     private final Map<String, java.util.List<String>> subFocos = new LinkedHashMap<>();
@@ -178,7 +175,6 @@ public class StudyTracker extends JFrame {
     private final Map<String, String> areaType = new LinkedHashMap<>();
     private static final String[] TYPE_KEYS   = {"estudo", "fisico", "lazer", "trabalho", "outro"};
     private static final String[] TYPE_LABELS = {"Estudo", "Físico", "Lazer", "Trabalho", "Outro"};
-    private static final String[] TYPE_ICONS  = {"📚", "💪", "🎮", "💼", "•"};
     // Meta mínima semanal por TIPO (minutos). 0/ausente = sem meta de equilíbrio.
     private final Map<String, Integer> typeGoalWeek = new LinkedHashMap<>();
     private String balanceNudgeWeek = null;   // ISO "2026-W37" da última vez que avisou desequilíbrio
@@ -736,6 +732,7 @@ public class StudyTracker extends JFrame {
         if (arquivada) {
             btns.add(smallBtn("Reativar", StyledButton.Variant.TEXT, () -> unarchiveSubject(area)));
         } else {
+            btns.add(smallBtn("Sub-focos", StyledButton.Variant.TEXT, () -> showSubFocosDialog(area)));
             btns.add(smallBtn("Editar",   StyledButton.Variant.TEXT, () -> editSubjectName(area)));
             btns.add(smallBtn("Cor",      StyledButton.Variant.TEXT, () -> changeSubjectColor(area)));
             btns.add(smallBtn("Zerar",    StyledButton.Variant.TEXT, () -> zeroOutSubjectTime(area)));
@@ -893,7 +890,7 @@ public class StudyTracker extends JFrame {
     }
 
     private JPanel buildSubjectRow() {
-        // Duas linhas: [Matéria + Meta + barra de meta]  /  [Nota + Tipo]
+        // [Área + Meta + barra de meta]. Nota, sub-foco e energia são perguntados ao terminar.
         JPanel wrap = new JPanel();
         wrap.setLayout(new BoxLayout(wrap, BoxLayout.Y_AXIS));
         wrap.setOpaque(false);
@@ -911,47 +908,13 @@ public class StudyTracker extends JFrame {
         subjectComboBox = new JComboBox<>();
         styleInput(subjectComboBox);
         subjectComboBox.setPreferredSize(new Dimension(220, 32));
-        subjectComboBox.addActionListener(e -> { updateGoalProgress(); refreshProgressCard(); refreshKindCombo(); });
+        subjectComboBox.addActionListener(e -> { pendingSubFoco = null; updateGoalProgress(); refreshProgressCard(); });
         left.add(lbl); left.add(subjectComboBox);
 
         StyledButton btnGoal = new StyledButton("Meta", StyledButton.Variant.TEXT);
         btnGoal.setFont(AppTheme.FONT_SMALL);
         btnGoal.addActionListener(e -> showGoalDialog());
         left.add(btnGoal);
-
-        // Linha 2: Nota + Tipo
-        JPanel noteRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
-        noteRow.setOpaque(false);
-        noteRow.setAlignmentX(Component.LEFT_ALIGNMENT);
-        noteRow.setBorder(new EmptyBorder(6, 0, 0, 0));
-        JLabel noteLbl = new JLabel("Nota:");
-        noteLbl.setFont(AppTheme.FONT_BOLD); noteLbl.setForeground(AppTheme.TEXT_PRI);
-        noteField = new JTextField(24);
-        styleInput(noteField);
-        noteField.setToolTipText("Opcional: o que você estudou nesta sessão (vai para o Histórico)");
-        JLabel kindLbl = new JLabel("Tipo:");
-        kindLbl.setFont(AppTheme.FONT_BOLD); kindLbl.setForeground(AppTheme.TEXT_PRI);
-        kindCombo = new JComboBox<>();
-        styleInput(kindCombo);
-        kindCombo.setToolTipText("Sub-foco desta sessão (tópico / grupo muscular / hobby)");
-        kindCombo.addActionListener(e -> {
-            if (KIND_MANAGE.equals(kindCombo.getSelectedItem())) {
-                String a = (String) subjectComboBox.getSelectedItem();
-                if (a != null) showSubFocosDialog(a);
-                kindCombo.setSelectedIndex(0);
-            }
-        });
-        kindLbl.setText("Sub-foco:");
-        JLabel enLbl = new JLabel("Energia:");
-        enLbl.setFont(AppTheme.FONT_BOLD); enLbl.setForeground(AppTheme.TEXT_PRI);
-        energyCombo = new JComboBox<>(ENERGY_LABELS);
-        styleInput(energyCombo);
-        energyCombo.setToolTipText("Como estava sua energia nesta sessão");
-        noteRow.add(noteLbl); noteRow.add(noteField);
-        noteRow.add(Box.createHorizontalStrut(6));
-        noteRow.add(kindLbl); noteRow.add(kindCombo);
-        noteRow.add(Box.createHorizontalStrut(6));
-        noteRow.add(enLbl); noteRow.add(energyCombo);
 
         // Barra de meta (oculta por padrão)
         goalBar = new JPanel(new BorderLayout(8, 0));
@@ -976,7 +939,6 @@ public class StudyTracker extends JFrame {
         row.add(goalBar, BorderLayout.CENTER);
 
         wrap.add(row);
-        wrap.add(noteRow);
         return wrap;
     }
 
@@ -1147,8 +1109,8 @@ public class StudyTracker extends JFrame {
             toast("Termine ou zere a sessão de \"" + subjectComboBox.getSelectedItem() + "\" antes.");
             return;
         }
-        subjectComboBox.setSelectedItem(area);        // dispara refreshKindCombo
-        if (subFoco != null && kindCombo != null) kindCombo.setSelectedItem(subFoco);
+        subjectComboBox.setSelectedItem(area);
+        pendingSubFoco = subFoco;                      // depois do combo (o listener dele limpa)
         showScreen(SCR_HOJE);                           // o cronômetro fica na tela Hoje
         if (bottomTabs != null) bottomTabs.select(0);   // aba Cronômetro
         startStopwatch();
@@ -1294,7 +1256,7 @@ public class StudyTracker extends JFrame {
         row.setAlignmentX(Component.LEFT_ALIGNMENT);
         row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 22));
 
-        JLabel name = new JLabel(typeIcon(type) + " " + typeLabel(type));
+        JLabel name = new JLabel(typeLabel(type));
         name.setFont(AppTheme.FONT_SMALL);
         name.setForeground(AppTheme.TEXT_SEC);
         name.setPreferredSize(new Dimension(96, 16));
@@ -1347,7 +1309,7 @@ public class StudyTracker extends JFrame {
             int v = typeGoalWeek.getOrDefault(TYPE_KEYS[i], 0);
             fs[i] = new JTextField(v > 0 ? String.valueOf(v) : "", 6);
             fs[i].setFont(AppTheme.FONT_LABEL);
-            addFormRow(panel, c, i + 1, TYPE_ICONS[i] + "  " + TYPE_LABELS[i] + ":", fs[i]);
+            addFormRow(panel, c, i + 1, TYPE_LABELS[i] + ":", fs[i]);
         }
 
         int r = JOptionPane.showConfirmDialog(this, panel, "Metas de equilíbrio (semana)",
@@ -2042,7 +2004,6 @@ public class StudyTracker extends JFrame {
         return 0;
     }
     private static String typeLabel(String key) { return TYPE_LABELS[typeIndex(key)]; }
-    private static String typeIcon(String key)  { return TYPE_ICONS[typeIndex(key)]; }
     private static Color typeColor(String key) {
         switch (key) {
             case "fisico":   return new Color(0x66BB6A);
@@ -2390,7 +2351,7 @@ public class StudyTracker extends JFrame {
             toast("Abaixo do foco mínimo (" + setMinFocusMin + " min) — não salvo.");
             return;   // mantém o tempo para o usuário continuar
         }
-        addTime(subject, mins, "cronometro");
+        addTime(subject, mins, "cronometro", askSessionDetails(subject, mins, "Sessão concluída"));
         toast(formatTime(mins * 60) + " salvo em " + subject);
         resetStopwatch();
         transitionNudge();
@@ -2489,8 +2450,7 @@ public class StudyTracker extends JFrame {
         StudyData sd = area == null ? null : studyDataMap.get(area);
         Color cor = sd != null ? sd.getColor() : AppTheme.ACCENT;
         String nome = area == null ? "" : area;
-        Object sf = kindCombo == null ? null : kindCombo.getSelectedItem();
-        if (sf != null && !"–".equals(sf) && !KIND_MANAGE.equals(sf)) nome += " · " + sf;
+        if (pendingSubFoco != null) nome += " · " + pendingSubFoco;
 
         boolean pomo = pomodoroActive(), pausado;
         int correndo;   // minutos da sessão atual, ainda não salvos
@@ -2563,7 +2523,11 @@ public class StudyTracker extends JFrame {
             String subject = (String) subjectComboBox.getSelectedItem();
             boolean didFocus = wasFocusSession && subject != null;
             if (didFocus) {
-                addTime(subject, plannedMinutes, "pomodoro");
+                // Ciclo automático não para pra perguntar: o próximo bloco começa sozinho.
+                SessionDetails d;
+                if (setPomoAutoCycle) d = SessionDetails.of(pendingSubFoco);
+                else { exitFocusMode(); d = askSessionDetails(subject, plannedMinutes, "Foco concluído"); }
+                addTime(subject, plannedMinutes, "pomodoro", d);
                 pomoCycleFocos++;
                 updatePomodoroCount();
             }
@@ -2581,9 +2545,7 @@ public class StudyTracker extends JFrame {
                 }
             } else {
                 exitFocusMode();   // o aviso de fim aparece com o app aberto
-                if (didFocus) showInfoDialog("Foco concluído",
-                        plannedMinutes + " min adicionados a " + subject + ".");
-                else          showInfoDialog("Pausa concluída", "Pronto para mais uma sessão?");
+                if (!didFocus) showInfoDialog("Pausa concluída", "Pronto para mais uma sessão?");
             }
         }
 
@@ -2644,7 +2606,7 @@ public class StudyTracker extends JFrame {
             int m   = minutesField.getText().trim().isEmpty() ? 0 : Integer.parseInt(minutesField.getText().trim());
             int tot = h * 60 + m;
             if (tot > 0) {
-                addTime(subject, tot, "manual");
+                addTime(subject, tot, "manual", askSessionDetails(subject, tot, "Tempo adicionado"));
                 hoursField.setText(""); minutesField.setText("");
                 toast(formatTime(tot * 60) + " adicionado a " + subject);
             } else { toast("Insira um tempo válido."); }
@@ -2653,22 +2615,126 @@ public class StudyTracker extends JFrame {
 
     // ── DATA (tempo + sessão) ────────────────────────────────────────────────
 
-    private void addTime(String subject, int minutes, String type) {
+    /** Sub-foco, energia (0 = não informada, 1..3) e nota de uma sessão. Tudo opcional. */
+    private static final class SessionDetails {
+        final String kind, note;
+        final int energy;
+        SessionDetails(String kind, String note, int energy) {
+            this.kind = kind == null ? "" : kind;
+            this.note = note == null ? "" : note;
+            this.energy = energy;
+        }
+        static SessionDetails of(String kind) { return new SessionDetails(kind, "", 0); }
+    }
+
+    /**
+     * "Como foi?" ao terminar: sub-foco e energia em botões de 1 clique, nota opcional.
+     * Enter salva; fechar a janela também salva (o tempo nunca se perde por causa do diálogo).
+     */
+    private SessionDetails askSessionDetails(String subject, int minutes, String titulo) {
+        if (!setAskDetails) return SessionDetails.of(pendingSubFoco);
+
+        JPanel panel = new JPanel(new GridBagLayout());
+        GridBagConstraints c = new GridBagConstraints();
+        c.gridx = 0; c.anchor = GridBagConstraints.WEST; c.fill = GridBagConstraints.HORIZONTAL;
+        c.weightx = 1; c.insets = new Insets(2, 2, 2, 2);
+        int row = 0;
+
+        c.gridy = row++;
+        panel.add(dlgLabel(fmtHM(minutes) + " de " + subject + ". Como foi?", true), c);
+
+        java.util.List<String> sfs = subFocos.getOrDefault(subject, java.util.Collections.emptyList());
+        ChoiceRow sfRow = null;
+        if (!sfs.isEmpty()) {
+            c.gridy = row++; c.insets = new Insets(10, 2, 2, 2);
+            panel.add(dlgHint("No que você focou?"), c);
+            sfRow = new ChoiceRow(sfs.toArray(new String[0]), sfs.indexOf(pendingSubFoco));
+            c.gridy = row++; c.insets = new Insets(2, 2, 2, 2);
+            panel.add(sfRow, c);
+        }
+
+        c.gridy = row++; c.insets = new Insets(10, 2, 2, 2);
+        panel.add(dlgHint("Energia"), c);
+        ChoiceRow enRow = new ChoiceRow(new String[]{ENERGY_TEXT[1], ENERGY_TEXT[2], ENERGY_TEXT[3]}, -1);
+        c.gridy = row++; c.insets = new Insets(2, 2, 2, 2);
+        panel.add(enRow, c);
+
+        c.gridy = row++; c.insets = new Insets(10, 2, 2, 2);
+        panel.add(dlgHint("Nota (vai para o Histórico)"), c);
+        JTextField note = new JTextField(28);
+        note.setFont(AppTheme.FONT_LABEL);
+        c.gridy = row++; c.insets = new Insets(2, 2, 2, 2);
+        panel.add(note, c);
+
+        JOptionPane op = new JOptionPane(panel, JOptionPane.PLAIN_MESSAGE, JOptionPane.DEFAULT_OPTION,
+                null, new Object[]{"Salvar"}, "Salvar");
+        JDialog dlg = op.createDialog(dialogOwner(), titulo);
+        dlg.addWindowFocusListener(new WindowAdapter() {   // já dá para digitar a nota; Enter salva
+            @Override public void windowGainedFocus(WindowEvent e) { note.requestFocusInWindow(); }
+        });
+        note.addActionListener(e -> op.setValue("Salvar"));
+        dlg.setVisible(true);
+        dlg.dispose();
+
+        String kind = sfRow != null && sfRow.selected() >= 0 ? sfs.get(sfRow.selected()) : null;
+        String txt = AppTheme.semHtml(note.getText().replace('|', '/').trim());   // | separa campos da sessão
+        return new SessionDetails(kind, txt, enRow.selected() + 1);
+    }
+
+    /** Linha de botões em que no máximo um fica marcado; clicar no marcado desmarca. */
+    private static final class ChoiceRow extends JPanel {
+        private final java.util.List<JToggleButton> btns = new ArrayList<>();
+        ChoiceRow(String[] labels, int initial) {
+            super(new FlowLayout(FlowLayout.LEFT, 6, 0));
+            for (int i = 0; i < labels.length; i++) {
+                // Pintado à mão: no Nimbus o botão marcado quase não se distingue do desmarcado.
+                JToggleButton b = new JToggleButton(labels[i], i == initial) {
+                    @Override protected void paintComponent(Graphics g) {
+                        Graphics2D g2 = (Graphics2D) g.create();
+                        g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                        g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+                        int w = getWidth(), h = getHeight();
+                        if (isSelected()) {
+                            g2.setColor(AppTheme.ACCENT);
+                            g2.fillRoundRect(0, 0, w - 1, h - 1, 14, 14);
+                        } else {
+                            g2.setColor(getModel().isRollover() ? AppTheme.SURFACE2 : AppTheme.SURFACE);
+                            g2.fillRoundRect(0, 0, w - 1, h - 1, 14, 14);
+                            g2.setColor(AppTheme.DIVIDER);
+                            g2.drawRoundRect(0, 0, w - 1, h - 1, 14, 14);
+                        }
+                        g2.setFont(isSelected() ? AppTheme.FONT_BOLD : AppTheme.FONT_LABEL);
+                        g2.setColor(isSelected() ? Color.WHITE : AppTheme.TEXT_PRI);
+                        FontMetrics fm = g2.getFontMetrics();
+                        g2.drawString(getText(), (w - fm.stringWidth(getText())) / 2,
+                                (h - fm.getHeight()) / 2 + fm.getAscent());
+                        g2.dispose();
+                    }
+                };
+                b.setFont(AppTheme.FONT_BOLD);   // mede pelo negrito: o texto não muda de tamanho ao marcar
+                b.setContentAreaFilled(false);
+                b.setBorderPainted(false);
+                b.setBorder(BorderFactory.createEmptyBorder(6, 14, 6, 14));
+                b.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+                b.setFocusPainted(false);
+                b.addActionListener(e -> { if (b.isSelected()) for (JToggleButton o : btns) if (o != b) o.setSelected(false); });
+                btns.add(b);
+                add(b);
+            }
+        }
+        int selected() {
+            for (int i = 0; i < btns.size(); i++) if (btns.get(i).isSelected()) return i;
+            return -1;
+        }
+    }
+
+    private void addTime(String subject, int minutes, String type, SessionDetails d) {
         LocalDate today = LocalDate.now();
         int beforeToday = minutesOnDay(subject, today);
 
-        String note = noteField == null ? "" : noteField.getText().trim();
-        String kind = "";
-        if (kindCombo != null) {
-            Object sel = kindCombo.getSelectedItem();
-            if (sel != null && !"–".equals(sel) && !KIND_MANAGE.equals(sel)) kind = sel.toString();
-        }
-        int energy = energyCombo == null ? 0 : Math.max(0, energyCombo.getSelectedIndex());
         studyDataMap.get(subject).addMinutes(minutes);
-        sessions.add(new StudySession(subject, minutes, System.currentTimeMillis(), type, note, kind, energy));
-        if (noteField != null) noteField.setText("");
-        if (kindCombo != null && kindCombo.getItemCount() > 0) kindCombo.setSelectedIndex(0);
-        if (energyCombo != null) energyCombo.setSelectedIndex(0);
+        sessions.add(new StudySession(subject, minutes, System.currentTimeMillis(), type, d.note, d.kind, d.energy));
+        pendingSubFoco = null;
         updateUI();
         saveData(); saveSessions();
 
@@ -3265,7 +3331,7 @@ public class StudyTracker extends JFrame {
 
     private JComboBox<String> tipoCombo(String selectedKey) {
         String[] itens = new String[TYPE_KEYS.length];
-        for (int i = 0; i < TYPE_KEYS.length; i++) itens[i] = TYPE_ICONS[i] + "  " + TYPE_LABELS[i];
+        for (int i = 0; i < TYPE_KEYS.length; i++) itens[i] = TYPE_LABELS[i];
         JComboBox<String> cb = new JComboBox<>(itens);
         cb.setSelectedIndex(typeIndex(selectedKey));
         cb.setFont(AppTheme.FONT_LABEL);
@@ -3471,7 +3537,7 @@ public class StudyTracker extends JFrame {
         // Volta os ajustes ao padrão: um backup sem alguma chave não pode herdar o valor antigo.
         setMinFocusMin = 1; setIdleMinutes = 10; setPomoAutoCycle = false;
         setReminderHour = -1; setTransitionMin = 5; setHyperfocusH = 3;
-        setUpdateCheck = true; updateCheckedDay = null; setFocusMode = true;
+        setUpdateCheck = true; updateCheckedDay = null; setFocusMode = true; setAskDetails = true;
         weeklySummaryShownWeek = null; reminderShownDay = null; balanceNudgeWeek = null;
         loadOk = true;
 
@@ -3531,6 +3597,8 @@ public class StudyTracker extends JFrame {
         c.gridx = 0; c.gridy = row++; c.gridwidth = 2;
         panel.add(dlgHint("Se não tiver estudado até essa hora, o app avisa (notificação do Windows)."), c);
 
+        JCheckBox cbAsk = new JCheckBox("Ao terminar, perguntar sub-foco, energia e nota", setAskDetails);
+        cbAsk.setOpaque(false);
         JCheckBox cbFocus = new JCheckBox("Ao começar uma sessão, recolher a janela numa faixa pequena", setFocusMode);
         cbFocus.setOpaque(false);
         c.gridx = 0; c.gridy = row++; c.gridwidth = 2; c.insets = new Insets(12, 4, 2, 4);
@@ -3539,6 +3607,10 @@ public class StudyTracker extends JFrame {
         panel.add(cbFocus, c);
         c.gridy = row++; c.insets = new Insets(0, 4, 4, 4);
         panel.add(dlgHint("A faixa fica por cima das outras janelas, com o tempo e a meta de hoje. \"Abrir app\" volta para a tela cheia."), c);
+        c.gridy = row++; c.insets = new Insets(8, 4, 4, 4);
+        panel.add(cbAsk, c);
+        c.gridy = row++; c.insets = new Insets(0, 4, 4, 4);
+        panel.add(dlgHint("Tudo opcional: Enter salva. Desligado, salva direto (com o sub-foco sugerido, se houver)."), c);
 
         c.gridx = 0; c.gridy = row++; c.gridwidth = 2; c.insets = new Insets(12, 4, 2, 4);
         panel.add(dlgLabel("Pomodoro", true), c);
@@ -3583,6 +3655,7 @@ public class StudyTracker extends JFrame {
         setHyperfocusH   = (int) spHyper.getValue();
         setPomoAutoCycle = cbCycle.isSelected();
         setFocusMode     = cbFocus.isSelected();
+        setAskDetails    = cbAsk.isSelected();
         setUpdateCheck   = cbUpdate.isSelected();
         String rem = (String) cbReminder.getSelectedItem();
         setReminderHour = (rem == null || rem.startsWith("Des")) ? -1 : Integer.parseInt(rem.substring(0, 2));
@@ -3724,27 +3797,11 @@ public class StudyTracker extends JFrame {
         for (String s : studyDataMap.keySet())
             if (!archived.contains(s) && typeIndexKnown(typeOf(s)) < 0) subjectComboBox.addItem(s);
         if (sel != null && !archived.contains(sel)) subjectComboBox.setSelectedItem(sel);
-        refreshKindCombo();
     }
 
     private static int typeIndexKnown(String key) {
         for (int i = 0; i < TYPE_KEYS.length; i++) if (TYPE_KEYS[i].equals(key)) return i;
         return -1;
-    }
-
-    /** Popula o combo de sub-foco com os sub-focos da área ativa. */
-    private void refreshKindCombo() {
-        if (kindCombo == null) return;
-        String area = (String) subjectComboBox.getSelectedItem();
-        ActionListener[] ls = kindCombo.getActionListeners();
-        for (ActionListener l : ls) kindCombo.removeActionListener(l);
-        kindCombo.removeAllItems();
-        kindCombo.addItem("–");
-        if (area != null)
-            for (String sf : subFocos.getOrDefault(area, java.util.Collections.emptyList())) kindCombo.addItem(sf);
-        kindCombo.addItem(KIND_MANAGE);
-        kindCombo.setSelectedIndex(0);
-        for (ActionListener l : ls) kindCombo.addActionListener(l);
     }
 
     /** Diálogo para editar os sub-focos de uma área (um por linha). */
@@ -3787,7 +3844,6 @@ public class StudyTracker extends JFrame {
         }
         if (nova.isEmpty()) subFocos.remove(area); else subFocos.put(area, nova);
         saveData();
-        refreshKindCombo();
         toast("Sub-focos de \"" + area + "\" atualizados.");
     }
 
@@ -3833,6 +3889,7 @@ public class StudyTracker extends JFrame {
         p.setProperty("__hyperfocus_h__",   String.valueOf(setHyperfocusH));
         p.setProperty("__update_check__",   String.valueOf(setUpdateCheck));
         p.setProperty("__focus_mode__",     String.valueOf(setFocusMode));
+        p.setProperty("__ask_details__",    String.valueOf(setAskDetails));
         if (updateCheckedDay != null) p.setProperty("__update_checked_day__", updateCheckedDay);
         if (weeklySummaryShownWeek != null) p.setProperty("__week_summary_shown__", weeklySummaryShownWeek);
         if (reminderShownDay != null)       p.setProperty("__reminder_shown_day__", reminderShownDay);
@@ -3938,6 +3995,10 @@ public class StudyTracker extends JFrame {
                 }
                 if (k.equals("__hyperfocus_h__")) {
                     try { setHyperfocusH = Math.max(0, Integer.parseInt(p.getProperty(k))); } catch (Exception ignored) {}
+                    continue;
+                }
+                if (k.equals("__ask_details__")) {
+                    setAskDetails = !"false".equalsIgnoreCase(p.getProperty(k));
                     continue;
                 }
                 if (k.equals("__focus_mode__")) {
