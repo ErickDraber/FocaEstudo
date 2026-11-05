@@ -12,76 +12,13 @@ import java.util.List;
 public class StudyTracker extends JFrame {
 
     // Os dados ficam na pasta do usuário do Windows (%APPDATA%\FocaEstudo), não na
-    // pasta do programa: trocar de versão não perde nada e o .bat e o .exe usam o
-    // mesmo save. BASE_DIR (pasta do programa) só serve para migrar os dados das
-    // versões até a 1.0.2, que gravavam ao lado do programa.
-    private static final File BASE_DIR       = resolveBaseDir();
-    private static final File DATA_DIR       = resolveDataDir();
-    private static final File SAVE_FILE      = new File(DATA_DIR, "study_data.properties");
-    private static final File SESSION_FILE   = new File(DATA_DIR, "study_sessions.properties");
-    private static final File CHECKLIST_FILE = new File(DATA_DIR, "study_checklist.properties");
-    private static final String MIGRATED_MARKER = "DADOS_MOVIDOS.txt";
+    // pasta do programa: trocar de versão não perde nada. Leitura/gravação dos arquivos,
+    // backup e migração ficam no StudyStore (testado em test/StudyStoreTest.java).
+    // BASE_DIR (pasta do programa) só serve para migrar os dados das versões até a 1.0.2.
+    private static final File BASE_DIR = StudyStore.resolveBaseDir();
+    private static final StudyStore STORE = new StudyStore(StudyStore.resolveDataDir(BASE_DIR));
+    private static final File DATA_DIR = STORE.dir;
     private static File migratedFrom = null;   // != null ⇒ avisar o usuário que os dados mudaram de lugar
-
-    private static File resolveDataDir() {
-        String custom = System.getProperty("focaestudo.dados");   // testes: java -Dfocaestudo.dados=<pasta>
-        if (custom != null && !custom.trim().isEmpty()) return new File(custom.trim());
-        String appData = System.getenv("APPDATA");
-        if (appData != null && new File(appData).isDirectory()) return new File(appData, "FocaEstudo");
-        return BASE_DIR;   // fora do Windows: continua ao lado do programa
-    }
-
-    /**
-     * Copia (não move) os dados da pasta do programa para DATA_DIR, uma vez só.
-     * Nunca sobrescreve: se DATA_DIR já tem dados, não mexe em nada.
-     */
-    private static void migrateLegacyData() {
-        if (DATA_DIR.getAbsoluteFile().equals(BASE_DIR.getAbsoluteFile())) return;
-        if (SAVE_FILE.exists()) return;
-        if (new File(BASE_DIR, MIGRATED_MARKER).exists()) return;
-        if (!new File(BASE_DIR, SAVE_FILE.getName()).isFile()) return;   // nada a migrar
-        try {
-            // study_data por último: é a existência dele que marca a migração como feita.
-            for (File f : new File[]{SESSION_FILE, CHECKLIST_FILE, SAVE_FILE})
-                for (String suf : new String[]{".bak", ""}) {
-                    File src = new File(BASE_DIR, f.getName() + suf);
-                    if (src.isFile())
-                        java.nio.file.Files.copy(src.toPath(), new File(DATA_DIR, src.getName()).toPath(),
-                                java.nio.file.StandardCopyOption.REPLACE_EXISTING,
-                                java.nio.file.StandardCopyOption.COPY_ATTRIBUTES);
-                }
-        } catch (IOException e) {
-            e.printStackTrace();   // sem study_data em DATA_DIR, a próxima abertura tenta de novo
-            return;
-        }
-        migratedFrom = BASE_DIR;
-        try {
-            java.nio.file.Files.write(new File(BASE_DIR, MIGRATED_MARKER).toPath(), (
-                    "A partir da versão 1.1.0, o FocaEstudo guarda seus dados em:\r\n"
-                  + "    " + DATA_DIR.getAbsolutePath() + "\r\n\r\n"
-                  + "Os arquivos study_*.properties desta pasta são a cópia antiga e não são mais usados.\r\n")
-                    .getBytes(java.nio.charset.StandardCharsets.UTF_8));
-        } catch (IOException ignored) {}   // sem permissão de escrita: só não deixa o aviso
-    }
-
-    /** Descobre a raiz do projeto a partir da localização das classes (…/bin ⇒ raiz). */
-    private static File resolveBaseDir() {
-        // Empacotado pelo jpackage (FocaEstudo.exe): dados ao lado do .exe, não em …/app
-        String exe = System.getProperty("jpackage.app-path");
-        if (exe != null) {
-            File dir = new File(exe).getParentFile();
-            if (dir != null && dir.isDirectory()) return dir;
-        }
-        try {
-            File loc = new File(StudyTracker.class.getProtectionDomain()
-                    .getCodeSource().getLocation().toURI());
-            File dir = loc.isFile() ? loc.getParentFile() : loc;   // …/bin  ou  …/app.jar
-            if (dir != null && "bin".equalsIgnoreCase(dir.getName()) && dir.getParentFile() != null)
-                dir = dir.getParentFile();
-            if (dir != null && dir.isDirectory()) return dir;
-        } catch (Exception ignored) {}
-        return new File(System.getProperty("user.dir"));
-    }
 
     private final Map<String, StudyData>  studyDataMap = new LinkedHashMap<>();
     private final List<StudySession>      sessions     = new ArrayList<>();
@@ -3334,11 +3271,6 @@ public class StudyTracker extends JFrame {
 
     // ── EXPORTAR / IMPORTAR ─────────────────────────────────────────────────
 
-    private static final String EXPORT_SEP_DATA     = "===== FOCAESTUDO DADOS =====";
-    private static final String EXPORT_SEP_SESSIONS  = "===== FOCAESTUDO SESSOES =====";
-    private static final String EXPORT_SEP_TAREFAS   = "===== FOCAESTUDO TAREFAS =====";
-    private static final long   MAX_IMPORT_BYTES     = 20L * 1024 * 1024;   // backups reais têm poucos KB
-
     private void exportData() {
         saveData(); saveSessions(); saveChecklist();   // garante que o disco está atualizado
         JFileChooser fc = new JFileChooser();          // abre em Documentos
@@ -3347,14 +3279,8 @@ public class StudyTracker extends JFrame {
                 + ".txt"));
         if (fc.showSaveDialog(this) != JFileChooser.APPROVE_OPTION) return;
         try {
-            String dados    = SAVE_FILE.exists()      ? readText(SAVE_FILE)      : "";
-            String sessoes  = SESSION_FILE.exists()   ? readText(SESSION_FILE)   : "";
-            String tarefas  = CHECKLIST_FILE.exists() ? readText(CHECKLIST_FILE) : "";
-            String out = EXPORT_SEP_DATA + "\n" + dados + "\n"
-                       + EXPORT_SEP_SESSIONS + "\n" + sessoes + "\n"
-                       + EXPORT_SEP_TAREFAS + "\n" + tarefas + "\n";
             java.nio.file.Files.write(fc.getSelectedFile().toPath(),
-                    out.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                    STORE.exportText().getBytes(java.nio.charset.StandardCharsets.UTF_8));
             toast("Backup exportado.");
         } catch (IOException e) {
             JOptionPane.showMessageDialog(this, "Falha ao exportar: " + e.getMessage());
@@ -3364,39 +3290,19 @@ public class StudyTracker extends JFrame {
     private void importData() {
         JFileChooser fc = new JFileChooser();
         if (fc.showOpenDialog(this) != JFileChooser.APPROVE_OPTION) return;
-        if (fc.getSelectedFile().length() > MAX_IMPORT_BYTES) {
+        if (fc.getSelectedFile().length() > StudyStore.MAX_IMPORT_BYTES) {
             JOptionPane.showMessageDialog(this, "Arquivo grande demais para ser um backup do FocaEstudo.");
             return;
         }
         try {
             String all = new String(java.nio.file.Files.readAllBytes(fc.getSelectedFile().toPath()),
                     java.nio.charset.StandardCharsets.UTF_8);
-            int iData = all.indexOf(EXPORT_SEP_DATA);
-            int iSess = all.indexOf(EXPORT_SEP_SESSIONS);
-            int iTar  = all.indexOf(EXPORT_SEP_TAREFAS);
-            if (iData < 0 || iSess < 0 || iSess < iData) {
+            StudyStore.Backup b = StudyStore.parseBackup(all);
+            if (b == null) {
                 JOptionPane.showMessageDialog(this, "Arquivo não parece um backup do FocaEstudo.");
                 return;
             }
-            String dados   = all.substring(iData + EXPORT_SEP_DATA.length(), iSess).trim();
-            String sessoes = iTar > iSess
-                    ? all.substring(iSess + EXPORT_SEP_SESSIONS.length(), iTar).trim()
-                    : all.substring(iSess + EXPORT_SEP_SESSIONS.length()).trim();
-            String tarefas = iTar > iSess ? all.substring(iTar + EXPORT_SEP_TAREFAS.length()).trim() : "";
-
-            Properties test = new Properties();
-            test.load(new java.io.StringReader(dados));
-            long materias = test.stringPropertyNames().stream().filter(k -> {
-                String v = test.getProperty(k);
-                if (v == null || !v.contains(",")) return false;
-                try {
-                    String[] pp = v.split(",");
-                    Integer.parseInt(pp[0].trim());
-                    Integer.parseInt(pp[1].trim());
-                    return true;
-                } catch (Exception ex) { return false; }
-            }).count();
-            if (materias == 0) {
+            if (StudyStore.countSubjects(b.dados) == 0) {
                 JOptionPane.showMessageDialog(this, "O backup não tem matérias válidas — importação cancelada.");
                 return;
             }
@@ -3407,21 +3313,12 @@ public class StudyTracker extends JFrame {
                     "Importar dados", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
             if (r != JOptionPane.YES_OPTION) return;
 
-            backup(SAVE_FILE); backup(SESSION_FILE); backup(CHECKLIST_FILE);
-            java.nio.file.Files.write(SAVE_FILE.toPath(),    dados.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            java.nio.file.Files.write(SESSION_FILE.toPath(), sessoes.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            java.nio.file.Files.write(CHECKLIST_FILE.toPath(), tarefas.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-
+            STORE.importBackup(b);
             reloadFromDisk();
             toast("Dados importados.");
         } catch (Exception e) {
             JOptionPane.showMessageDialog(this, "Falha ao importar: " + e.getMessage());
         }
-    }
-
-    private static String readText(File f) throws IOException {
-        return new String(java.nio.file.Files.readAllBytes(f.toPath()),
-                java.nio.charset.StandardCharsets.ISO_8859_1);
     }
 
     /** Recarrega tudo dos arquivos (após importar). */
@@ -3793,62 +3690,13 @@ public class StudyTracker extends JFrame {
         if (reminderShownDay != null)       p.setProperty("__reminder_shown_day__", reminderShownDay);
         p.setProperty("__theme__", AppTheme.dark ? "dark" : "light");
 
-        backup(SAVE_FILE);
-        storeAtomic(p, SAVE_FILE, "FocaEstudo Data");
-    }
-
-    /**
-     * Grava as Properties de forma atômica: escreve num arquivo temporário, força
-     * para disco e só então renomeia por cima do original. Se faltar luz no meio,
-     * o arquivo bom continua intacto.
-     */
-    private static void storeAtomic(Properties p, File target, String header) {
-        File tmp = new File(target.getParentFile(), target.getName() + ".tmp");
-        try {
-            try (FileOutputStream out = new FileOutputStream(tmp)) {
-                p.store(out, header);
-                out.flush();
-                out.getFD().sync();
-            }
-            try {
-                java.nio.file.Files.move(tmp.toPath(), target.toPath(),
-                        java.nio.file.StandardCopyOption.ATOMIC_MOVE,
-                        java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-            } catch (java.nio.file.AtomicMoveNotSupportedException ex) {
-                java.nio.file.Files.move(tmp.toPath(), target.toPath(),
-                        java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-            }
-        } catch (IOException e) {
-            e.printStackTrace();
-            tmp.delete();
-        }
-    }
-
-    /** Lê Properties já neutralizando HTML em chaves e valores (ver AppTheme.semHtml). */
-    private static Properties loadSemHtml(InputStream in) throws IOException {
-        Properties raw = new Properties();
-        raw.load(in);
-        Properties p = new Properties();
-        for (String k : raw.stringPropertyNames())
-            p.setProperty(AppTheme.semHtml(k), AppTheme.semHtml(raw.getProperty(k)));
-        return p;
-    }
-
-    /** Copia arquivo para <nome>.bak antes de sobrescrever. */
-    private static void backup(File f) {
-        if (!f.isFile()) return;
-        try (FileInputStream in = new FileInputStream(f);
-             FileOutputStream out = new FileOutputStream(new File(f.getParentFile(), f.getName() + ".bak"))) {
-            byte[] buf = new byte[8192];
-            int n;
-            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
-        } catch (IOException ignored) {}
+        STORE.writeData(p);
     }
 
     private void loadData() {
-        if (!SAVE_FILE.exists()) return;   // primeiro uso de verdade
-        try (FileInputStream in = new FileInputStream(SAVE_FILE)) {
-            Properties p = loadSemHtml(in);
+        try {
+            Properties p = STORE.readData();
+            if (p == null) return;   // primeiro uso de verdade
             for (String k : p.stringPropertyNames()) {
                 if (k.equals("__theme__")) {
                     if ("dark".equals(p.getProperty(k))) AppTheme.applyDark();
@@ -3991,26 +3839,12 @@ public class StudyTracker extends JFrame {
 
     private void saveSessions() {
         if (!ready || !loadOk) return;
-        Properties p = new Properties();
-        for (int i = 0; i < sessions.size(); i++) {
-            p.setProperty("s" + i, sessions.get(i).serialize());
-        }
-        backup(SESSION_FILE);
-        storeAtomic(p, SESSION_FILE, "FocaEstudo Sessions");
+        STORE.writeSessions(sessions);
     }
 
     private void loadSessions() {
-        Properties p = new Properties();
-        if (!SESSION_FILE.exists()) return;   // primeiro uso
-        try (FileInputStream in = new FileInputStream(SESSION_FILE)) {
-            p.load(in);
-            List<StudySession> tmp = new ArrayList<>();
-            for (String k : p.stringPropertyNames()) {
-                StudySession s = StudySession.deserialize(p.getProperty(k));
-                if (s != null) tmp.add(s);
-            }
-            tmp.sort(Comparator.comparingLong(StudySession::getTimestamp));
-            sessions.addAll(tmp);
+        try {
+            sessions.addAll(STORE.readSessions());
         } catch (IOException e) {
             loadOk = false;   // não deixa um save posterior truncar o histórico
             e.printStackTrace();
@@ -4019,22 +3853,15 @@ public class StudyTracker extends JFrame {
 
     private void saveChecklist() {
         if (!ready || !loadOk) return;
-        Properties p = new Properties();
-        for (int i = 0; i < checklist.size(); i++) p.setProperty("c" + i, checklist.get(i).serialize());
-        backup(CHECKLIST_FILE);
-        storeAtomic(p, CHECKLIST_FILE, "FocaEstudo Checklist");
+        STORE.writeChecklist(checklist);
     }
 
     private void loadChecklist() {
-        if (!CHECKLIST_FILE.exists()) return;
-        Properties p = new Properties();
-        try (FileInputStream in = new FileInputStream(CHECKLIST_FILE)) {
-            p.load(in);
-            for (String k : p.stringPropertyNames()) {
-                ChecklistItem it = ChecklistItem.deserialize(p.getProperty(k));
-                if (it != null) checklist.add(it);
-            }
-        } catch (IOException e) { e.printStackTrace(); }
+        try {
+            checklist.addAll(STORE.readChecklist());
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
     }
 
     // ── UTILS ───────────────────────────────────────────────────────────────
@@ -4309,38 +4136,16 @@ public class StudyTracker extends JFrame {
         if (studyDataMap.isEmpty()) { System.exit(0); }
     }
 
-    // Mantido vivo pela duração do processo: o SO libera o lock quando o processo termina.
-    @SuppressWarnings("unused")
-    private static java.nio.channels.FileLock instanceLock;
-    private static final File LOCK_FILE = new File(DATA_DIR, "focaestudo.lock");
-
-    /**
-     * Garante uma única instância: duas cópias gravando o mesmo save corrompem os dados.
-     * Usa lock de arquivo na pasta dos dados (antes era uma porta TCP local, que abria
-     * um ponto de escuta desnecessário e podia ser ocupada por outro programa).
-     */
-    private static boolean acquireSingleInstanceLock() {
-        try {
-            java.nio.channels.FileChannel ch = new RandomAccessFile(LOCK_FILE, "rw").getChannel();
-            instanceLock = ch.tryLock();
-            return instanceLock != null;   // null ⇒ outra instância segura o lock
-        } catch (java.nio.channels.OverlappingFileLockException e) {
-            return false;
-        } catch (IOException e) {
-            return true;    // pasta sem permissão de escrita: não dá para checar, segue
-        }
-    }
-
     public static void main(String[] args) {
         DATA_DIR.mkdirs();
-        if (!acquireSingleInstanceLock()) {
+        if (!STORE.acquireSingleInstanceLock()) {
             int r = JOptionPane.showConfirmDialog(null,
                     "O FocaEstudo parece já estar aberto.\n"
                   + "Abrir assim mesmo pode corromper seus dados.\n\nAbrir mesmo assim?",
                     "FocaEstudo", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
             if (r != JOptionPane.YES_OPTION) System.exit(0);
         }
-        migrateLegacyData();   // depois da trava: duas instâncias não migram ao mesmo tempo
+        migratedFrom = STORE.migrateLegacyFrom(BASE_DIR);   // depois da trava: duas instâncias não migram juntas
         AppTheme.installLookAndFeel();
         SwingUtilities.invokeLater(() -> new StudyTracker().initializeUI());
     }

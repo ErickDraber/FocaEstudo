@@ -14,4 +14,5 @@ if %errorlevel% neq 0 (
 
 set FALHOU=0
 java -Djava.awt.headless=true -cp "%OUT%" StudyStatsTest || set FALHOU=1
+java -Djava.awt.headless=true -cp "%OUT%" StudyStoreTest || set FALHOU=1
 exit /b %FALHOU%
