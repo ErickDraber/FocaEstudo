@@ -19,3 +19,6 @@
 
 # Compilados (gerados pelo Executar_Programa.bat)
 /bin/
+
+# Grafo gerado pelo /graphify
+/graphify-out/
