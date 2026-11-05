@@ -70,21 +70,10 @@ public class StudyTracker extends JFrame {
     private long  lastActivityMs = System.currentTimeMillis();
     private boolean idleAsking = false;
 
-    // --- Ajustes (persistidos em study_data como __chave__) ---
-    private int     setMinFocusMin   = 1;      // não salva sessão de cronômetro/pomodoro abaixo disso
-    private int     setIdleMinutes   = 0;      // 0 = desativado (padrão)
-    private boolean setPomoAutoCycle = false;  // encadeia foco → pausa → foco automaticamente
-    private int     setReminderHour  = -1;     // hora do lembrete diário (0-23); -1 = desligado
-    private int     setTransitionMin = 5;      // pausa sugerida entre blocos (min); 0 = desligado
-    private int     setHyperfocusH   = 3;      // aviso de hiperfoco após N h seguidas; 0 = desligado
-    private boolean setUpdateCheck   = true;   // consulta o GitHub (1×/dia) se saiu versão nova
-    private boolean setFocusMode     = true;   // ao começar uma sessão, a janela vira a faixa do modo foco
-    private boolean setAskDetails    = true;   // ao terminar, pergunta sub-foco, energia e nota
-    private String  updateCheckedDay = null;   // ISO date da última consulta que deu certo
+    // --- Ajustes + marcadores "já mostrei" (persistidos em study_data como __chave__; ver AppSettings) ---
+    private final AppSettings cfg = new AppSettings();
 
-    // --- Estado de recorrências ---
-    private String  weeklySummaryShownWeek = null; // ISO "2026-W37" da última vez que mostrou o resumo
-    private String  reminderShownDay       = null; // ISO date do último lembrete mostrado
+    // --- Recorrências ---
     private Timer   reminderTimer;
     private java.awt.TrayIcon trayIcon;
 
@@ -115,7 +104,6 @@ public class StudyTracker extends JFrame {
     private static final String[] TYPE_LABELS = {"Estudo", "Físico", "Lazer", "Trabalho", "Outro"};
     // Meta mínima semanal por TIPO (minutos). 0/ausente = sem meta de equilíbrio.
     private final Map<String, Integer> typeGoalWeek = new LinkedHashMap<>();
-    private String balanceNudgeWeek = null;   // ISO "2026-W37" da última vez que avisou desequilíbrio
 
     // --- Metas (em minutos, por matéria; 0 = sem meta) ---
     private final Map<String, Integer> goals      = new LinkedHashMap<>(); // diária IDEAL
@@ -221,15 +209,15 @@ public class StudyTracker extends JFrame {
     }
 
     private void checkIdle() {
-        if (idleAsking || setIdleMinutes <= 0) return;
+        if (idleAsking || cfg.idleMinutes <= 0) return;
         if (stopwatch == null || !stopwatch.isRunning()) return;
         long idleMs = System.currentTimeMillis() - lastActivityMs;
-        if (idleMs < setIdleMinutes * 60_000L) return;
+        if (idleMs < cfg.idleMinutes * 60_000L) return;
 
         idleAsking = true;
         stopStopwatch();                       // pausa enquanto pergunta
         int r = JOptionPane.showConfirmDialog(dialogOwner(),
-                "Sem atividade há " + setIdleMinutes + " min.\nAinda está estudando?",
+                "Sem atividade há " + cfg.idleMinutes + " min.\nAinda está estudando?",
                 "Continuar?", JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE);
         idleAsking = false;
         lastActivityMs = System.currentTimeMillis();
@@ -1278,7 +1266,7 @@ public class StudyTracker extends JFrame {
         if (today.getDayOfWeek().getValue() < 4) return;   // só de quinta em diante
         java.time.temporal.WeekFields wf = java.time.temporal.WeekFields.ISO;
         String semana = today.get(wf.weekBasedYear()) + "-W" + today.get(wf.weekOfWeekBasedYear());
-        if (semana.equals(balanceNudgeWeek)) return;
+        if (semana.equals(cfg.balanceNudgeWeek)) return;
 
         LocalDate ws = weekStart(today);
         List<String> faltando = new ArrayList<>();
@@ -1287,7 +1275,7 @@ public class StudyTracker extends JFrame {
             if (minutesByTypeInRange(t, ws, today) == 0) faltando.add(typeLabel(t).toLowerCase());
         }
         if (faltando.isEmpty()) return;
-        balanceNudgeWeek = semana;   // persistido no saveData() do updateUI
+        cfg.balanceNudgeWeek = semana;   // persistido no saveData() do updateUI
         Timer tt = new Timer(600, e -> toast("Sua semana está sem " + String.join(" e ", faltando)
                 + ". Que tal um pouco hoje?"));
         tt.setRepeats(false); tt.start();
@@ -2074,13 +2062,13 @@ public class StudyTracker extends JFrame {
         top.add(Box.createHorizontalStrut(16));
         top.add(lbl("Pausa (min):")); top.add(breakSpinner);
 
-        autoCycleCheck = new JCheckBox("Ciclos automáticos", setPomoAutoCycle);
+        autoCycleCheck = new JCheckBox("Ciclos automáticos", cfg.pomoAutoCycle);
         autoCycleCheck.setOpaque(false);
         autoCycleCheck.setFont(AppTheme.FONT_SMALL);
         autoCycleCheck.setForeground(AppTheme.TEXT_SEC);
         autoCycleCheck.setToolTipText("Encadeia foco → pausa → foco sozinho; pausa longa a cada 4 focos");
         autoCycleCheck.addActionListener(e -> {
-            setPomoAutoCycle = autoCycleCheck.isSelected();
+            cfg.pomoAutoCycle = autoCycleCheck.isSelected();
             saveData();
         });
         top.add(Box.createHorizontalStrut(16));
@@ -2258,8 +2246,8 @@ public class StudyTracker extends JFrame {
         if (elapsedSeconds == 0) return;
         String subject = (String) subjectComboBox.getSelectedItem();
         int mins = (int) Math.round(elapsedSeconds / 60.0);
-        if (mins < Math.max(1, setMinFocusMin)) {
-            toast("Abaixo do foco mínimo (" + setMinFocusMin + " min) — não salvo.");
+        if (mins < Math.max(1, cfg.minFocusMin)) {
+            toast("Abaixo do foco mínimo (" + cfg.minFocusMin + " min) — não salvo.");
             return;   // mantém o tempo para o usuário continuar
         }
         addTime(subject, mins, "cronometro", askSessionDetails(subject, mins, "Sessão concluída"));
@@ -2270,8 +2258,8 @@ public class StudyTracker extends JFrame {
 
     /** Nudge gentil de pausa entre blocos. */
     private void transitionNudge() {
-        if (setTransitionMin <= 0) return;
-        Timer t = new Timer(2600, e -> toast("Bloco salvo. Que tal " + setTransitionMin
+        if (cfg.transitionMin <= 0) return;
+        Timer t = new Timer(2600, e -> toast("Bloco salvo. Que tal " + cfg.transitionMin
                 + " min de pausa? Levanta, bebe água."));
         t.setRepeats(false); t.start();
     }
@@ -2292,9 +2280,9 @@ public class StudyTracker extends JFrame {
         String pausas = stopwatchPauseCount == 1 ? "1 pausa" : stopwatchPauseCount + " pausas";
         stopwatchInfoLabel.setText("líquido  ·  " + pausas + "  ·  bruto " + bruto);
 
-        if (setHyperfocusH > 0 && !hyperfocusWarned && grossSec >= setHyperfocusH * 3600L) {
+        if (cfg.hyperfocusH > 0 && !hyperfocusWarned && grossSec >= cfg.hyperfocusH * 3600L) {
             hyperfocusWarned = true;
-            toast("Você está há " + setHyperfocusH + "h seguidas. Dá um respiro?");
+            toast("Você está há " + cfg.hyperfocusH + "h seguidas. Dá um respiro?");
         }
     }
 
@@ -2310,7 +2298,7 @@ public class StudyTracker extends JFrame {
 
     /** force = pedido explícito ("Modo foco" no cartão Agora), vale mesmo com o ajuste desligado. */
     private void enterFocusMode(boolean force) {
-        if ((!setFocusMode && !force) || focusBar != null || !sessionInProgress()) return;
+        if ((!cfg.focusMode && !force) || focusBar != null || !sessionInProgress()) return;
         focusBar = new FocusBar(new FocusBar.Actions() {
             public void togglePause() { focusTogglePause(); }
             public void finish()      { focusFinish(); }
@@ -2436,14 +2424,14 @@ public class StudyTracker extends JFrame {
             if (didFocus) {
                 // Ciclo automático não para pra perguntar: o próximo bloco começa sozinho.
                 SessionDetails d;
-                if (setPomoAutoCycle) d = SessionDetails.of(pendingSubFoco);
+                if (cfg.pomoAutoCycle) d = SessionDetails.of(pendingSubFoco);
                 else { exitFocusMode(); d = askSessionDetails(subject, plannedMinutes, "Foco concluído"); }
                 addTime(subject, plannedMinutes, "pomodoro", d);
                 pomoCycleFocos++;
                 updatePomodoroCount();
             }
 
-            if (setPomoAutoCycle) {
+            if (cfg.pomoAutoCycle) {
                 if (didFocus) {
                     boolean longBreak = pomoCycleFocos % 4 == 0;
                     int mins = longBreak ? Math.max(15, (int) breakSpinner.getValue() * 3) : 0;
@@ -2608,7 +2596,7 @@ public class StudyTracker extends JFrame {
      * Enter salva; fechar a janela também salva (o tempo nunca se perde por causa do diálogo).
      */
     private SessionDetails askSessionDetails(String subject, int minutes, String titulo) {
-        if (!setAskDetails) return SessionDetails.of(pendingSubFoco);
+        if (!cfg.askDetails) return SessionDetails.of(pendingSubFoco);
 
         JPanel panel = new JPanel(new GridBagLayout());
         GridBagConstraints c = new GridBagConstraints();
@@ -3330,10 +3318,7 @@ public class StudyTracker extends JFrame {
         streakBest.clear(); unknownProps.clear();
         streakBestGeneral = 0; celebratedStreakMilestone = 0;
         // Volta os ajustes ao padrão: um backup sem alguma chave não pode herdar o valor antigo.
-        setMinFocusMin = 1; setIdleMinutes = 0; setPomoAutoCycle = false;
-        setReminderHour = -1; setTransitionMin = 5; setHyperfocusH = 3;
-        setUpdateCheck = true; updateCheckedDay = null; setFocusMode = true; setAskDetails = true;
-        weeklySummaryShownWeek = null; reminderShownDay = null; balanceNudgeWeek = null;
+        cfg.reset();
         loadOk = true;
 
         ready = false;            // não grava nada enquanto recarrega
@@ -3351,11 +3336,11 @@ public class StudyTracker extends JFrame {
     // ── AJUSTES ─────────────────────────────────────────────────────────────
 
     private void showSettingsDialog() {
-        JSpinner spFocus = new JSpinner(new SpinnerNumberModel(setMinFocusMin, 0, 60, 1));
-        JSpinner spIdle  = new JSpinner(new SpinnerNumberModel(setIdleMinutes, 0, 120, 1));
-        JSpinner spTrans = new JSpinner(new SpinnerNumberModel(setTransitionMin, 0, 30, 1));
-        JSpinner spHyper = new JSpinner(new SpinnerNumberModel(setHyperfocusH, 0, 12, 1));
-        JCheckBox cbCycle = new JCheckBox("Encadear foco → pausa → foco automaticamente", setPomoAutoCycle);
+        JSpinner spFocus = new JSpinner(new SpinnerNumberModel(cfg.minFocusMin, 0, 60, 1));
+        JSpinner spIdle  = new JSpinner(new SpinnerNumberModel(cfg.idleMinutes, 0, 120, 1));
+        JSpinner spTrans = new JSpinner(new SpinnerNumberModel(cfg.transitionMin, 0, 30, 1));
+        JSpinner spHyper = new JSpinner(new SpinnerNumberModel(cfg.hyperfocusH, 0, 12, 1));
+        JCheckBox cbCycle = new JCheckBox("Encadear foco → pausa → foco automaticamente", cfg.pomoAutoCycle);
         cbCycle.setOpaque(false);
 
         JPanel panel = new JPanel(new GridBagLayout());
@@ -3387,14 +3372,14 @@ public class StudyTracker extends JFrame {
         JComboBox<String> cbReminder = new JComboBox<>();
         cbReminder.addItem("Desligado");
         for (int hRem = 5; hRem <= 23; hRem++) cbReminder.addItem(String.format("%02d:00", hRem));
-        cbReminder.setSelectedItem(setReminderHour < 0 ? "Desligado" : String.format("%02d:00", setReminderHour));
+        cbReminder.setSelectedItem(cfg.reminderHour < 0 ? "Desligado" : String.format("%02d:00", cfg.reminderHour));
         addFormRow(panel, c, row++, "Lembrete diário:", cbReminder);
         c.gridx = 0; c.gridy = row++; c.gridwidth = 2;
         panel.add(dlgHint("Se não tiver estudado até essa hora, o app avisa (notificação do Windows)."), c);
 
-        JCheckBox cbAsk = new JCheckBox("Ao terminar, perguntar sub-foco, energia e nota", setAskDetails);
+        JCheckBox cbAsk = new JCheckBox("Ao terminar, perguntar sub-foco, energia e nota", cfg.askDetails);
         cbAsk.setOpaque(false);
-        JCheckBox cbFocus = new JCheckBox("Ao começar uma sessão, recolher a janela numa faixa pequena", setFocusMode);
+        JCheckBox cbFocus = new JCheckBox("Ao começar uma sessão, recolher a janela numa faixa pequena", cfg.focusMode);
         cbFocus.setOpaque(false);
         c.gridx = 0; c.gridy = row++; c.gridwidth = 2; c.insets = new Insets(12, 4, 2, 4);
         panel.add(dlgLabel("Modo foco", true), c);
@@ -3431,7 +3416,7 @@ public class StudyTracker extends JFrame {
         c.gridy = row++; c.insets = new Insets(0, 4, 4, 4);
         panel.add(dlgHint("Um arquivo único com matérias + histórico, para backup ou levar a outro PC."), c);
 
-        JCheckBox cbUpdate = new JCheckBox("Avisar quando sair uma versão nova", setUpdateCheck);
+        JCheckBox cbUpdate = new JCheckBox("Avisar quando sair uma versão nova", cfg.updateCheck);
         cbUpdate.setOpaque(false);
         c.gridy = row++; c.insets = new Insets(12, 4, 2, 4);
         panel.add(dlgLabel("Atualizações", true), c);
@@ -3444,17 +3429,17 @@ public class StudyTracker extends JFrame {
                 JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
         if (r != JOptionPane.OK_OPTION) return;
 
-        setMinFocusMin   = (int) spFocus.getValue();
-        setIdleMinutes   = (int) spIdle.getValue();
-        setTransitionMin = (int) spTrans.getValue();
-        setHyperfocusH   = (int) spHyper.getValue();
-        setPomoAutoCycle = cbCycle.isSelected();
-        setFocusMode     = cbFocus.isSelected();
-        setAskDetails    = cbAsk.isSelected();
-        setUpdateCheck   = cbUpdate.isSelected();
+        cfg.minFocusMin   = (int) spFocus.getValue();
+        cfg.idleMinutes   = (int) spIdle.getValue();
+        cfg.transitionMin = (int) spTrans.getValue();
+        cfg.hyperfocusH   = (int) spHyper.getValue();
+        cfg.pomoAutoCycle = cbCycle.isSelected();
+        cfg.focusMode     = cbFocus.isSelected();
+        cfg.askDetails    = cbAsk.isSelected();
+        cfg.updateCheck   = cbUpdate.isSelected();
         String rem = (String) cbReminder.getSelectedItem();
-        setReminderHour = (rem == null || rem.startsWith("Des")) ? -1 : Integer.parseInt(rem.substring(0, 2));
-        if (autoCycleCheck != null) autoCycleCheck.setSelected(setPomoAutoCycle);
+        cfg.reminderHour = (rem == null || rem.startsWith("Des")) ? -1 : Integer.parseInt(rem.substring(0, 2));
+        if (autoCycleCheck != null) autoCycleCheck.setSelected(cfg.pomoAutoCycle);
         saveData();
         toast("Ajustes salvos.");
     }
@@ -3670,24 +3655,12 @@ public class StudyTracker extends JFrame {
         goalsMin.forEach((k, v) -> { if (v > 0) p.setProperty("goalmin_" + k, String.valueOf(v)); });
         if (!hardDays.isEmpty()) p.setProperty("__hard_days__", String.join(",", hardDays));
         weekPlan.forEach((k, l) -> { if (!l.isEmpty()) p.setProperty("plan_" + k, String.join("|", l)); });
-        if (balanceNudgeWeek != null) p.setProperty("__balance_nudge_week__", balanceNudgeWeek);
         if (!archived.isEmpty()) p.setProperty("__archived__", String.join(",", archived));
         streakBest.forEach((k, v) -> p.setProperty("streakbest_" + k, String.valueOf(v)));
         unknownProps.forEach(p::setProperty);   // preserva chaves que não soubemos ler
         p.setProperty("__streakbest_general__", String.valueOf(streakBestGeneral));
         p.setProperty("__streak_milestone__", String.valueOf(celebratedStreakMilestone));
-        p.setProperty("__min_focus__",      String.valueOf(setMinFocusMin));
-        p.setProperty("__idle_min__",       String.valueOf(setIdleMinutes));
-        p.setProperty("__pomo_autocycle__", String.valueOf(setPomoAutoCycle));
-        p.setProperty("__reminder_hour__", String.valueOf(setReminderHour));
-        p.setProperty("__transition_min__", String.valueOf(setTransitionMin));
-        p.setProperty("__hyperfocus_h__",   String.valueOf(setHyperfocusH));
-        p.setProperty("__update_check__",   String.valueOf(setUpdateCheck));
-        p.setProperty("__focus_mode__",     String.valueOf(setFocusMode));
-        p.setProperty("__ask_details__",    String.valueOf(setAskDetails));
-        if (updateCheckedDay != null) p.setProperty("__update_checked_day__", updateCheckedDay);
-        if (weeklySummaryShownWeek != null) p.setProperty("__week_summary_shown__", weeklySummaryShownWeek);
-        if (reminderShownDay != null)       p.setProperty("__reminder_shown_day__", reminderShownDay);
+        cfg.writeTo(p);
         p.setProperty("__theme__", AppTheme.dark ? "dark" : "light");
 
         STORE.writeData(p);
@@ -3698,6 +3671,7 @@ public class StudyTracker extends JFrame {
             Properties p = STORE.readData();
             if (p == null) return;   // primeiro uso de verdade
             for (String k : p.stringPropertyNames()) {
+                if (cfg.readKey(k, p.getProperty(k))) continue;   // ajustes e marcadores
                 if (k.equals("__theme__")) {
                     if ("dark".equals(p.getProperty(k))) AppTheme.applyDark();
                     else AppTheme.applyLight();
@@ -3719,45 +3693,6 @@ public class StudyTracker extends JFrame {
                     try { celebratedStreakMilestone = Integer.parseInt(p.getProperty(k)); } catch (Exception ignored) {}
                     continue;
                 }
-                if (k.equals("__min_focus__")) {
-                    try { setMinFocusMin = Math.max(0, Integer.parseInt(p.getProperty(k))); } catch (Exception ignored) {}
-                    continue;
-                }
-                if (k.equals("__idle_min__")) {
-                    try { setIdleMinutes = Math.max(0, Integer.parseInt(p.getProperty(k))); } catch (Exception ignored) {}
-                    continue;
-                }
-                if (k.equals("__pomo_autocycle__")) {
-                    setPomoAutoCycle = "true".equalsIgnoreCase(p.getProperty(k));
-                    continue;
-                }
-                if (k.equals("__reminder_hour__")) {
-                    try { setReminderHour = Integer.parseInt(p.getProperty(k)); } catch (Exception ignored) {}
-                    continue;
-                }
-                if (k.equals("__transition_min__")) {
-                    try { setTransitionMin = Math.max(0, Integer.parseInt(p.getProperty(k))); } catch (Exception ignored) {}
-                    continue;
-                }
-                if (k.equals("__hyperfocus_h__")) {
-                    try { setHyperfocusH = Math.max(0, Integer.parseInt(p.getProperty(k))); } catch (Exception ignored) {}
-                    continue;
-                }
-                if (k.equals("__ask_details__")) {
-                    setAskDetails = !"false".equalsIgnoreCase(p.getProperty(k));
-                    continue;
-                }
-                if (k.equals("__focus_mode__")) {
-                    setFocusMode = !"false".equalsIgnoreCase(p.getProperty(k));
-                    continue;
-                }
-                if (k.equals("__update_check__")) {
-                    setUpdateCheck = !"false".equalsIgnoreCase(p.getProperty(k));
-                    continue;
-                }
-                if (k.equals("__update_checked_day__")) { updateCheckedDay = p.getProperty(k); continue; }
-                if (k.equals("__week_summary_shown__")) { weeklySummaryShownWeek = p.getProperty(k); continue; }
-                if (k.equals("__reminder_shown_day__")) { reminderShownDay = p.getProperty(k); continue; }
                 if (k.equals("__archived__")) {
                     for (String a : p.getProperty(k).split(","))
                         if (!a.trim().isEmpty()) archived.add(a.trim());
@@ -3801,7 +3736,6 @@ public class StudyTracker extends JFrame {
                     if (!l.isEmpty()) weekPlan.put(k.substring(5), l);
                     continue;
                 }
-                if (k.equals("__balance_nudge_week__")) { balanceNudgeWeek = p.getProperty(k); continue; }
                 if (k.equals("__hard_days__")) {
                     for (String d : p.getProperty(k).split(",")) if (!d.trim().isEmpty()) hardDays.add(d.trim());
                     continue;
@@ -3950,14 +3884,14 @@ public class StudyTracker extends JFrame {
     /** No máximo 1× por dia, pergunta ao GitHub qual é a última versão. Não envia dado nenhum. */
     private void maybeCheckForUpdate() {
         String atual = System.getProperty("jpackage.app-version");   // só existe no .exe
-        if (!setUpdateCheck || atual == null) return;
+        if (!cfg.updateCheck || atual == null) return;
         String hoje = LocalDate.now().toString();
-        if (hoje.equals(updateCheckedDay)) return;
+        if (hoje.equals(cfg.updateCheckedDay)) return;
         Thread t = new Thread(() -> {
             String nova = fetchLatestVersion();
             if (nova == null) return;   // sem internet: tenta de novo na próxima abertura
             SwingUtilities.invokeLater(() -> {
-                updateCheckedDay = hoje;
+                cfg.updateCheckedDay = hoje;
                 saveData();
                 if (compareVersions(nova, atual) > 0) showUpdateDialog(atual, nova);
             });
@@ -4033,15 +3967,15 @@ public class StudyTracker extends JFrame {
     }
 
     private void checkReminder() {
-        if (setReminderHour < 0) return;
+        if (cfg.reminderHour < 0) return;
         LocalDate today = LocalDate.now();
         String hoje = today.toString();
-        if (hoje.equals(reminderShownDay)) return;
-        if (isHardDay(today)) { reminderShownDay = hoje; return; }             // dia difícil: sem lembrete
-        if (java.time.LocalTime.now().getHour() < setReminderHour) return;
-        if (minutesOnDay(null, today) > 0) { reminderShownDay = hoje; return; } // já estudou hoje
+        if (hoje.equals(cfg.reminderShownDay)) return;
+        if (isHardDay(today)) { cfg.reminderShownDay = hoje; return; }             // dia difícil: sem lembrete
+        if (java.time.LocalTime.now().getHour() < cfg.reminderHour) return;
+        if (minutesOnDay(null, today) > 0) { cfg.reminderShownDay = hoje; return; } // já estudou hoje
 
-        reminderShownDay = hoje;
+        cfg.reminderShownDay = hoje;
         saveData();
         String msg = "Que tal uns minutos de estudo hoje? Sua sequência agradece. 🔥";
         if (trayIcon != null) {
@@ -4058,12 +3992,12 @@ public class StudyTracker extends JFrame {
         LocalDate today = LocalDate.now();
         java.time.temporal.WeekFields wf = java.time.temporal.WeekFields.ISO;
         String semana = today.get(wf.weekBasedYear()) + "-W" + today.get(wf.weekOfWeekBasedYear());
-        if (semana.equals(weeklySummaryShownWeek)) return;
+        if (semana.equals(cfg.weeklySummaryShownWeek)) return;
         // só mostra a partir de sábado/domingo (fim de semana) ou se nunca mostrou
-        if (weeklySummaryShownWeek != null
+        if (cfg.weeklySummaryShownWeek != null
                 && today.getDayOfWeek().getValue() < 6) return;
 
-        weeklySummaryShownWeek = semana;
+        cfg.weeklySummaryShownWeek = semana;
         saveData();
 
         LocalDate ini = today.minusDays(6);
