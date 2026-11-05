@@ -135,7 +135,7 @@ public class StudyTracker extends JFrame {
 
     // --- Ajustes (persistidos em study_data como __chave__) ---
     private int     setMinFocusMin   = 1;      // não salva sessão de cronômetro/pomodoro abaixo disso
-    private int     setIdleMinutes   = 10;     // 0 = desativado
+    private int     setIdleMinutes   = 0;      // 0 = desativado (padrão)
     private boolean setPomoAutoCycle = false;  // encadeia foco → pausa → foco automaticamente
     private int     setReminderHour  = -1;     // hora do lembrete diário (0-23); -1 = desligado
     private int     setTransitionMin = 5;      // pausa sugerida entre blocos (min); 0 = desligado
@@ -3535,7 +3535,7 @@ public class StudyTracker extends JFrame {
         streakBest.clear(); unknownProps.clear();
         streakBestGeneral = 0; celebratedStreakMilestone = 0;
         // Volta os ajustes ao padrão: um backup sem alguma chave não pode herdar o valor antigo.
-        setMinFocusMin = 1; setIdleMinutes = 10; setPomoAutoCycle = false;
+        setMinFocusMin = 1; setIdleMinutes = 0; setPomoAutoCycle = false;
         setReminderHour = -1; setTransitionMin = 5; setHyperfocusH = 3;
         setUpdateCheck = true; updateCheckedDay = null; setFocusMode = true; setAskDetails = true;
         weeklySummaryShownWeek = null; reminderShownDay = null; balanceNudgeWeek = null;

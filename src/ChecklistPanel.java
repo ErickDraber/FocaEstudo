@@ -126,15 +126,33 @@ public class ChecklistPanel extends JDialog {
             txt.setForeground(it.done ? AppTheme.TEXT_SEC : AppTheme.TEXT_PRI);
             if (it.done) txt.setText("<html><strike>" + escape(txt.getText()) + "</strike></html>");
 
+            txt.setToolTipText("Duplo clique para editar");
+            txt.addMouseListener(new java.awt.event.MouseAdapter() {
+                @Override public void mouseClicked(java.awt.event.MouseEvent e) {
+                    if (e.getClickCount() == 2 && SwingUtilities.isLeftMouseButton(e)) editItem(it);
+                }
+            });
+
+            JButton edit = new JButton("Editar");
+            edit.setMargin(new Insets(0, 6, 0, 6));
+            edit.setFocusPainted(false);
+            edit.setToolTipText("Editar tarefa");
+            edit.addActionListener(e -> editItem(it));
+
             JButton del = new JButton("x");
             del.setMargin(new Insets(0, 6, 0, 6));
             del.setFocusPainted(false);
             del.setToolTipText("Remover");
             del.addActionListener(e -> { items.remove(it); onChange.run(); refresh(); });
 
+            JPanel actions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
+            actions.setOpaque(false);
+            actions.add(edit);
+            actions.add(del);
+
             card.add(cb, BorderLayout.WEST);
             card.add(txt, BorderLayout.CENTER);
-            card.add(del, BorderLayout.EAST);
+            card.add(actions, BorderLayout.EAST);
             listPanel.add(card);
             listPanel.add(Box.createVerticalStrut(5));
         }
@@ -155,6 +173,55 @@ public class ChecklistPanel extends JDialog {
 
         listPanel.revalidate();
         listPanel.repaint();
+    }
+
+    /** Edita texto, matéria e estimativa de uma tarefa. Cancelar não muda nada. */
+    private void editItem(ChecklistItem it) {
+        JTextField tf = new JTextField(it.text, 28);
+        JComboBox<String> cbSubj = new JComboBox<>(studyDataMap.keySet().toArray(new String[0]));
+        if (!studyDataMap.containsKey(it.subject)) cbSubj.addItem(it.subject);   // área arquivada/removida
+        cbSubj.setSelectedItem(it.subject);
+        JSpinner spEst = new JSpinner(new SpinnerNumberModel(Math.max(0, Math.min(600, it.estMin)), 0, 600, 15));
+        ((JSpinner.DefaultEditor) spEst.getEditor()).getTextField().setColumns(4);
+
+        JPanel form = new JPanel(new GridBagLayout());
+        GridBagConstraints c = new GridBagConstraints();
+        c.insets = new Insets(4, 4, 4, 4);
+        c.anchor = GridBagConstraints.WEST;
+        c.fill = GridBagConstraints.HORIZONTAL;
+        String[] labels = {"Tarefa:", "Matéria:", "Estimativa (min):"};
+        JComponent[] fields = {tf, cbSubj, spEst};
+        for (int i = 0; i < labels.length; i++) {
+            c.gridx = 0; c.gridy = i; c.weightx = 0;
+            form.add(new JLabel(labels[i]), c);
+            c.gridx = 1; c.weightx = 1;
+            form.add(fields[i], c);
+        }
+        // Foco no texto ao abrir, com tudo selecionado para reescrever rápido.
+        tf.addAncestorListener(new javax.swing.event.AncestorListener() {
+            public void ancestorAdded(javax.swing.event.AncestorEvent e) {
+                SwingUtilities.invokeLater(() -> { tf.requestFocusInWindow(); tf.selectAll(); });
+            }
+            public void ancestorRemoved(javax.swing.event.AncestorEvent e) {}
+            public void ancestorMoved(javax.swing.event.AncestorEvent e) {}
+        });
+
+        int r = JOptionPane.showConfirmDialog(this, form, "Editar tarefa",
+                JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+        if (r != JOptionPane.OK_OPTION) return;
+
+        String t = tf.getText().trim();
+        if (t.isEmpty()) {
+            JOptionPane.showMessageDialog(this, "A tarefa não pode ficar sem texto.", "Editar tarefa",
+                    JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        it.text = AppTheme.semHtml(t);
+        String subj = (String) cbSubj.getSelectedItem();
+        if (subj != null) it.subject = AppTheme.semHtml(subj);
+        it.estMin = (int) spEst.getValue();
+        onChange.run();
+        refresh();
     }
 
     private static String fmt(int minutes) {
