@@ -3860,6 +3860,7 @@ public class StudyTracker extends JFrame {
         try {
             checklist.addAll(STORE.readChecklist());
         } catch (IOException e) {
+            loadOk = false;   // idem: antes, falhar aqui deixava o próximo save apagar as tarefas
             e.printStackTrace();
         }
     }
