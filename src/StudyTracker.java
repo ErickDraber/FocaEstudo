@@ -153,6 +153,7 @@ public class StudyTracker extends JFrame {
 
     // --- Manual ---
     private JTextField hoursField, minutesField;
+    private JComboBox<DayOption> manualDayCombo;
 
     // --- Detalhes da sessão: perguntados AO TERMINAR, não antes (menos decisões para começar) ---
     private String pendingSubFoco;   // sub-foco já escolhido (ex.: rodízio do "Agora"); vem marcado no "Como foi?"
@@ -2140,6 +2141,25 @@ public class StudyTracker extends JFrame {
         minutesField = styledField("Minutos");
         StyledButton addBtn = new StyledButton("Adicionar Tempo", StyledButton.Variant.FILLED);
         addBtn.addActionListener(e -> addManualTime());
+        manualDayCombo = new JComboBox<>();
+        manualDayCombo.setFont(AppTheme.FONT_SMALL);
+        manualDayCombo.setToolTipText("Dia em que o tempo foi feito. Esqueceu de registrar? Escolha o dia certo.");
+        fillManualDays(LocalDate.now());
+        // Os rótulos são relativos a hoje: refaz a lista ao abrir (o app pode passar da meia-noite aberto).
+        manualDayCombo.addPopupMenuListener(new javax.swing.event.PopupMenuListener() {
+            public void popupMenuWillBecomeVisible(javax.swing.event.PopupMenuEvent e) {
+                DayOption sel = (DayOption) manualDayCombo.getSelectedItem();
+                fillManualDays(sel != null && sel.custom ? sel.day : null);
+            }
+            public void popupMenuWillBecomeInvisible(javax.swing.event.PopupMenuEvent e) {}
+            public void popupMenuCanceled(javax.swing.event.PopupMenuEvent e) {}
+        });
+        manualDayCombo.addActionListener(e -> {
+            DayOption sel = (DayOption) manualDayCombo.getSelectedItem();
+            if (sel != null && sel.day == null) pickOtherManualDay();
+        });
+        p.add(new JLabel("Dia:")     {{ setFont(AppTheme.FONT_LABEL); setForeground(AppTheme.TEXT_PRI); }});
+        p.add(manualDayCombo);
         p.add(new JLabel("Horas:")   {{ setFont(AppTheme.FONT_LABEL); setForeground(AppTheme.TEXT_PRI); }});
         p.add(hoursField);
         p.add(new JLabel("Minutos:") {{ setFont(AppTheme.FONT_LABEL); setForeground(AppTheme.TEXT_PRI); }});
@@ -2606,11 +2626,76 @@ public class StudyTracker extends JFrame {
             int m   = minutesField.getText().trim().isEmpty() ? 0 : Integer.parseInt(minutesField.getText().trim());
             int tot = h * 60 + m;
             if (tot > 0) {
-                addTime(subject, tot, "manual", askSessionDetails(subject, tot, "Tempo adicionado"));
+                DayOption sel = (DayOption) manualDayCombo.getSelectedItem();
+                LocalDate today = LocalDate.now();
+                LocalDate day = (sel == null || sel.day == null) ? today : sel.day;
+                if (day.isAfter(today)) { toast("Não dá para registrar num dia que ainda não chegou."); return; }
+                String quando = day.equals(today) ? "" : " (" + dayLabel(day, today).toLowerCase() + ")";
+                addTime(subject, tot, "manual", askSessionDetails(subject, tot, "Tempo adicionado" + quando), day);
                 hoursField.setText(""); minutesField.setText("");
-                toast(formatTime(tot * 60) + " adicionado a " + subject);
+                fillManualDays(null);   // volta para "Hoje": registrar no passado é exceção, não padrão
+                toast(formatTime(tot * 60) + " adicionado a " + subject + quando);
             } else { toast("Insira um tempo válido."); }
         } catch (NumberFormatException ex) { toast("Apenas números, por favor."); }
+    }
+
+    /** Opção do combo "Dia" da aba Manual. day == null ⇒ "Outra data…". */
+    private static final class DayOption {
+        final LocalDate day; final String label; final boolean custom;
+        DayOption(LocalDate day, String label, boolean custom) { this.day = day; this.label = label; this.custom = custom; }
+        @Override public String toString() { return label; }
+    }
+
+    private static final String[] DOW_PT = {"seg", "ter", "qua", "qui", "sex", "sáb", "dom"};
+
+    /** "Hoje", "Ontem" ou "seg 02/11". */
+    private static String dayLabel(LocalDate d, LocalDate today) {
+        if (d.equals(today)) return "Hoje";
+        if (d.equals(today.minusDays(1))) return "Ontem";
+        return DOW_PT[d.getDayOfWeek().getValue() - 1] + " " + String.format("%02d/%02d", d.getDayOfMonth(), d.getMonthValue())
+             + (d.getYear() != today.getYear() ? "/" + d.getYear() : "");
+    }
+
+    /** Hoje + 6 dias anteriores + "Outra data…". custom != null entra na lista e fica selecionado. */
+    private void fillManualDays(LocalDate custom) {
+        LocalDate today = LocalDate.now();
+        DefaultComboBoxModel<DayOption> m = new DefaultComboBoxModel<>();
+        DayOption select = null;
+        for (int i = 0; i < 7; i++) {
+            LocalDate d = today.minusDays(i);
+            DayOption o = new DayOption(d, dayLabel(d, today), false);
+            m.addElement(o);
+            if (i == 0 || d.equals(custom)) select = o;
+        }
+        if (custom != null && !custom.isAfter(today) && custom.isBefore(today.minusDays(6))) {
+            select = new DayOption(custom, dayLabel(custom, today), true);
+            m.addElement(select);
+        }
+        m.addElement(new DayOption(null, "Outra data…", false));
+        m.setSelectedItem(select);
+        manualDayCombo.setModel(m);
+    }
+
+    /** Pede uma data qualquer (até hoje). Cancelar volta para "Hoje". */
+    private void pickOtherManualDay() {
+        LocalDate today = LocalDate.now();
+        Date max = Date.from(today.atStartOfDay(ZoneId.systemDefault()).toInstant());
+        Date ini = Date.from(today.minusDays(7).atStartOfDay(ZoneId.systemDefault()).toInstant());
+        JSpinner sp = new JSpinner(new SpinnerDateModel(ini, null, max, Calendar.DAY_OF_MONTH));
+        sp.setEditor(new JSpinner.DateEditor(sp, "dd/MM/yyyy"));
+        JPanel pn = new JPanel(new BorderLayout(0, 6));
+        pn.add(new JLabel("Em que dia foi?"), BorderLayout.NORTH);
+        pn.add(sp, BorderLayout.CENTER);
+        SwingUtilities.invokeLater(() -> {
+            int r = JOptionPane.showConfirmDialog(this, pn, "Outra data", JOptionPane.OK_CANCEL_OPTION,
+                    JOptionPane.PLAIN_MESSAGE);
+            LocalDate d = null;
+            if (r == JOptionPane.OK_OPTION) {
+                d = Instant.ofEpochMilli(((Date) sp.getValue()).getTime()).atZone(ZoneId.systemDefault()).toLocalDate();
+                if (d.isAfter(today)) d = today;
+            }
+            fillManualDays(d);
+        });
     }
 
     // ── DATA (tempo + sessão) ────────────────────────────────────────────────
@@ -2729,16 +2814,31 @@ public class StudyTracker extends JFrame {
     }
 
     private void addTime(String subject, int minutes, String type, SessionDetails d) {
+        addTime(subject, minutes, type, d, LocalDate.now());
+    }
+
+    /**
+     * Registra tempo num dia. Dia passado (registro esquecido) vira uma sessão às 12:00 daquele dia;
+     * metas, sequência e calendário são derivados das sessões, então já contam no dia certo.
+     */
+    private void addTime(String subject, int minutes, String type, SessionDetails d, LocalDate day) {
         LocalDate today = LocalDate.now();
+        boolean isToday = !day.isBefore(today);
         int beforeToday = minutesOnDay(subject, today);
+        long ts = isToday ? System.currentTimeMillis()
+                : day.atTime(12, 0).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
 
         studyDataMap.get(subject).addMinutes(minutes);
-        sessions.add(new StudySession(subject, minutes, System.currentTimeMillis(), type, d.note, d.kind, d.energy));
+        StudySession s = new StudySession(subject, minutes, ts, type, d.note, d.kind, d.energy);
+        // mantém a lista em ordem cronológica, como ela é carregada do disco
+        int pos = sessions.size();
+        while (pos > 0 && sessions.get(pos - 1).getTimestamp() > ts) pos--;
+        sessions.add(pos, s);
         pendingSubFoco = null;
         updateUI();
         saveData(); saveSessions();
 
-        goalNudge(subject, beforeToday, beforeToday + minutes);
+        if (isToday) goalNudge(subject, beforeToday, beforeToday + minutes);
     }
 
     /** Toast de incentivo: meta do dia batida agora, ou reta final. */
