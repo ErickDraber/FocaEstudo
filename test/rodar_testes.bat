@@ -16,4 +16,5 @@ set FALHOU=0
 java -Djava.awt.headless=true -cp "%OUT%" StudyStatsTest || set FALHOU=1
 java -Djava.awt.headless=true -cp "%OUT%" StudyStoreTest || set FALHOU=1
 java -Djava.awt.headless=true -cp "%OUT%" AppSettingsTest || set FALHOU=1
+java -Djava.awt.headless=true -cp "%OUT%" TimerModelsTest || set FALHOU=1
 exit /b %FALHOU%
