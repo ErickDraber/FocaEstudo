@@ -127,6 +127,10 @@ public class StudyTracker extends JFrame {
     private final StudyStats stats = new StudyStats(sessions, studyDataMap.keySet(), archived,
             goals, goalsMin, goalsWeek, goalsMonth, goalDays, hardDays, java.time.Clock.systemDefaultZone());
 
+    // Criar/renomear/arquivar/apagar áreas mexendo em TODAS as coleções por área (ver Areas).
+    private final Areas areas = new Areas(studyDataMap, sessions, checklist, goals, goalsMin, goalsWeek,
+            goalsMonth, streakBest, goalDays, examDate, archived, areaType, subFocos, weekPlan);
+
     // --- Estado de persistência ---
     private boolean ready  = false;  // true quando a UI terminou de carregar
     private boolean loadOk = true;   // false se a leitura do save falhou (bloqueia gravação)
@@ -571,11 +575,7 @@ public class StudyTracker extends JFrame {
         return weekScreen;
     }
 
-    private List<String> activeAreas() {
-        List<String> areas = new ArrayList<>();
-        for (String s : studyDataMap.keySet()) if (!archived.contains(s)) areas.add(s);
-        return areas;
-    }
+    private List<String> activeAreas() { return areas.active(); }
 
     private Map<String, Color> areaColors() {
         Map<String, Color> colorMap = new LinkedHashMap<>();
@@ -1239,7 +1239,7 @@ public class StudyTracker extends JFrame {
         if (r != JOptionPane.OK_OPTION) return;
         try {
             for (int i = 0; i < TYPE_KEYS.length; i++) {
-                int v = parseDuration(fs[i].getText());
+                int v = GoalForm.parseDuration(fs[i].getText());
                 if (v > 0) typeGoalWeek.put(TYPE_KEYS[i], v); else typeGoalWeek.remove(TYPE_KEYS[i]);
             }
         } catch (IllegalArgumentException ex) {
@@ -2840,20 +2840,21 @@ public class StudyTracker extends JFrame {
             tgDias[i].setFocusPainted(false);
             diasRow.add(tgDias[i]);
         }
-        java.util.function.IntSupplier nDiasSel = () -> {
-            int n = 0;
-            for (JToggleButton t : tgDias) if (t.isSelected()) n++;
-            return n == 0 ? 7 : n;
+        java.util.function.Supplier<boolean[]> diasSel = () -> {
+            boolean[] b = new boolean[7];
+            for (int i = 0; i < 7; i++) b[i] = tgDias[i].isSelected();
+            return b;
         };
+        java.util.function.IntSupplier nDiasSel = () -> GoalForm.daysCount(diasSel.get());
 
         JLabel diasHint = dlgHint(nDiasSel.getAsInt() + " dia(s)/semana com meta");
         // Ao MEXER nos dias, semana e mês passam a ser diária × nº de dias.
         for (JToggleButton t : tgDias) t.addItemListener(e -> {
             int nd = nDiasSel.getAsInt();
             int d;
-            try { d = parseDuration(fDay.getText()); } catch (Exception ex) { d = 0; }
+            try { d = GoalForm.parseDuration(fDay.getText()); } catch (Exception ex) { d = 0; }
             if (d > 0) {
-                int wk = d * nd, mo = (int) Math.round(wk * 30.0 / 7.0);
+                int wk = GoalForm.weekFromDaily(d, nd), mo = GoalForm.monthFromWeek(wk);
                 fWeek.setText(String.valueOf(wk));
                 fMonth.setText(String.valueOf(mo));
                 diasHint.setText(nd + " dia(s)/semana  →  semana " + fmtHM(wk) + "  ·  mês " + fmtHM(mo));
@@ -2874,8 +2875,7 @@ public class StudyTracker extends JFrame {
 
         // Data de prova (opcional).
         LocalDate examAtual = examDate.get(subject);
-        JTextField fExam = new JTextField(
-                examAtual == null ? "" : examAtual.format(java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy")), 10);
+        JTextField fExam = new JTextField(GoalForm.examText(examAtual), 10);
         fExam.setFont(AppTheme.FONT_LABEL);
         addFormRow(panel, c, row++, "Data da prova:", fExam);
         c.gridx = 0; c.gridy = row++; c.gridwidth = 2; c.insets = new Insets(0, 3, 12, 3);
@@ -2916,7 +2916,7 @@ public class StudyTracker extends JFrame {
 
         int melhorSem = bestWeekMinutes(subject);
         if (melhorSem > 0) {
-            int perDay = Math.max(5, melhorSem / Math.max(1, nDiasSel.getAsInt()));
+            int perDay = GoalForm.bestWeekPerDay(melhorSem, nDiasSel.getAsInt());
             c.gridx = 0; c.gridy = row++; c.gridwidth = 2;
             panel.add(suggestionRow("Repetir sua melhor semana (" + fmtHM(melhorSem) + ")  →  " + fmtHM(perDay) + "/dia",
                     perDay, nDiasSel, fDay, fWeek, fMonth), c);
@@ -2940,38 +2940,33 @@ public class StudyTracker extends JFrame {
 
         int gDay, gWeek, gMonth;
         try {
-            gDay   = parseDuration(fDay.getText());
-            gWeek  = parseDuration(fWeek.getText());
-            gMonth = parseDuration(fMonth.getText());
+            gDay   = GoalForm.parseDuration(fDay.getText());
+            gWeek  = GoalForm.parseDuration(fWeek.getText());
+            gMonth = GoalForm.parseDuration(fMonth.getText());
         } catch (IllegalArgumentException ex) {
             toast("Meta inválida — use algo como \"90\", \"1h30\" ou \"1:30\".");
             return;
         }
 
         // Dias da meta
-        java.util.Set<java.time.DayOfWeek> dias = java.util.EnumSet.noneOf(java.time.DayOfWeek.class);
-        for (int i = 0; i < 7; i++) if (tgDias[i].isSelected()) dias.add(java.time.DayOfWeek.of(i + 1));
-        if (dias.isEmpty() || dias.size() == 7) goalDays.remove(subject);
-        else                                    goalDays.put(subject, dias);
+        java.util.Set<java.time.DayOfWeek> dias = GoalForm.daysFrom(diasSel.get());   // null = todos os dias
+        if (dias == null) goalDays.remove(subject);
+        else              goalDays.put(subject, dias);
 
         // Data da prova
-        String et = fExam.getText().trim();
-        if (et.isEmpty()) {
+        try {
+            LocalDate prova = GoalForm.parseExamDate(fExam.getText());
+            if (prova == null) examDate.remove(subject); else examDate.put(subject, prova);
+        } catch (IllegalArgumentException ex) {
+            toast("Data da prova inválida (use dd/mm/aaaa) — ignorada.");
             examDate.remove(subject);
-        } else {
-            try {
-                examDate.put(subject, LocalDate.parse(et,
-                        java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy")));
-            } catch (Exception ex) {
-                toast("Data da prova inválida (use dd/mm/aaaa) — ignorada.");
-                examDate.remove(subject);
-            }
         }
 
         int gMin;
-        try { gMin = parseDuration(fMin.getText()); } catch (IllegalArgumentException ex) { gMin = 0; }
+        try { gMin = GoalForm.parseDuration(fMin.getText()); } catch (IllegalArgumentException ex) { gMin = 0; }
         goals.put(subject, gDay);
-        if (gMin > 0 && gMin < gDay) goalsMin.put(subject, gMin); else goalsMin.remove(subject);
+        gMin = GoalForm.effectiveMin(gMin, gDay);
+        if (gMin > 0) goalsMin.put(subject, gMin); else goalsMin.remove(subject);
         goalsWeek.put(subject, gWeek);
         goalsMonth.put(subject, gMonth);
         updateUI();
@@ -2992,10 +2987,10 @@ public class StudyTracker extends JFrame {
      * selecionados: semana = diária × nDias; mês = semana × ~4,345.
      */
     private void fillGoalFields(int daily, int nDias, JTextField fDay, JTextField fWeek, JTextField fMonth) {
-        int week = daily * nDias;
+        int week = GoalForm.weekFromDaily(daily, nDias);
         fDay.setText(String.valueOf(daily));
         fWeek.setText(String.valueOf(week));
-        fMonth.setText(String.valueOf((int) Math.round(week * 30.0 / 7.0)));
+        fMonth.setText(String.valueOf(GoalForm.monthFromWeek(week)));
     }
 
     private JPanel suggestionRow(String text, int minutes, java.util.function.IntSupplier nDias,
@@ -3047,44 +3042,6 @@ public class StudyTracker extends JFrame {
         return l;
     }
 
-    /**
-     * Lê uma duração em minutos. Aceita: "90", "90m", "1h", "1h30", "1h30m",
-     * "1:30", "1,5h", "2 h". Vazio ⇒ 0. Negativo ⇒ 0.
-     * @throws IllegalArgumentException se o texto não for reconhecido.
-     */
-    private static int parseDuration(String text) {
-        if (text == null) return 0;
-        String t = text.trim().toLowerCase().replace(" ", "").replace(',', '.');
-        if (t.isEmpty()) return 0;
-        try {
-            if (t.contains(":")) {                       // h:mm
-                String[] p = t.split(":", 2);
-                int h = p[0].isEmpty() ? 0 : Integer.parseInt(p[0]);
-                int m = p[1].isEmpty() ? 0 : Integer.parseInt(p[1]);
-                return Math.max(0, h * 60 + m);
-            }
-            t = t.replace("min", "m");
-            if (t.contains("h") || t.endsWith("m")) {    // 1h / 1h30 / 45m / 1.5h
-                int hIdx = t.indexOf('h');
-                double h = 0; int m = 0;
-                if (hIdx >= 0) {
-                    String hs = t.substring(0, hIdx);
-                    if (!hs.isEmpty()) h = Double.parseDouble(hs);
-                    String rest = t.substring(hIdx + 1).replace("m", "");
-                    if (!rest.isEmpty()) m = Integer.parseInt(rest);
-                } else {
-                    String ms = t.replace("m", "");
-                    if (!ms.isEmpty()) m = Integer.parseInt(ms);
-                }
-                return Math.max(0, (int) Math.round(h * 60) + m);
-            }
-            if (t.contains(".")) return Math.max(0, (int) Math.round(Double.parseDouble(t)));
-            return Math.max(0, Integer.parseInt(t));     // número puro = minutos
-        } catch (NumberFormatException e) {
-            throw new IllegalArgumentException("duração inválida: " + text);
-        }
-    }
-
     private void updateGoalProgress() {
         String subject = (String) subjectComboBox.getSelectedItem();
         if (subject == null || !goals.containsKey(subject) || goals.get(subject) <= 0) {
@@ -3116,14 +3073,13 @@ public class StudyTracker extends JFrame {
         int r = JOptionPane.showConfirmDialog(this, panel, "Nova área",
                 JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
         if (r != JOptionPane.OK_OPTION) return;
-        String name = AppTheme.semHtml(fName.getText().replace('|', '/').trim());   // | separa áreas na semana
+        String name = Areas.cleanName(fName.getText());
         if (name.isEmpty()) return;
         String type = TYPE_KEYS[Math.max(0, cbType.getSelectedIndex())];
 
         if (archived.contains(name)) { unarchiveSubject(name); return; }   // era arquivada → desarquiva
         if (studyDataMap.containsKey(name)) { toast("Essa área já existe!"); return; }
-        studyDataMap.put(name, new StudyData(0, AppTheme.nextColor(studyDataMap.size())));
-        if (!"estudo".equals(type)) areaType.put(name, type);
+        areas.add(name, type);
         refreshCombo(); selectIfIdle(name); updateUI();
     }
 
@@ -3176,34 +3132,20 @@ public class StudyTracker extends JFrame {
                 JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
         if (rr != JOptionPane.OK_OPTION) return;
 
-        String novoTipo = TYPE_KEYS[Math.max(0, cbType.getSelectedIndex())];
-        if ("estudo".equals(novoTipo)) areaType.remove(old); else areaType.put(old, novoTipo);
+        areas.setType(old, TYPE_KEYS[Math.max(0, cbType.getSelectedIndex())]);
 
-        String nw = AppTheme.semHtml(fName.getText().replace('|', '/').trim());
-        if (nw.isEmpty() || nw.equals(old)) { refreshCombo(); subjectComboBox.setSelectedItem(cur); updateUI(); return; }
-        if (studyDataMap.containsKey(nw)) { toast("Esse nome já existe!"); return; }
-        StudyData d = studyDataMap.remove(old);
-        // Reconstrói mantendo ordem
-        Map<String, StudyData> tmp = new LinkedHashMap<>();
-        for (Map.Entry<String, StudyData> e : studyDataMap.entrySet()) tmp.put(e.getKey(), e.getValue());
-        studyDataMap.clear();
-        for (Map.Entry<String, StudyData> e : tmp.entrySet()) {
-            studyDataMap.put(e.getKey().equals(old) ? nw : e.getKey(), e.getValue());
+        switch (areas.rename(old, Areas.cleanName(fName.getText()))) {
+            case EXISTS:
+                toast("Esse nome já existe!");
+                return;
+            case UNCHANGED:   // só o tipo pode ter mudado
+                refreshCombo(); subjectComboBox.setSelectedItem(cur); updateUI();
+                return;
+            case OK:
+                String nw = Areas.cleanName(fName.getText());
+                refreshCombo(); subjectComboBox.setSelectedItem(old.equals(cur) ? nw : cur);
+                saveChecklist(); updateUI();
         }
-        studyDataMap.put(nw, d);
-        if (goals.containsKey(old))      { goals.put(nw, goals.remove(old)); }
-        if (goalsMin.containsKey(old))   { goalsMin.put(nw, goalsMin.remove(old)); }
-        if (goalsWeek.containsKey(old))  { goalsWeek.put(nw, goalsWeek.remove(old)); }
-        if (goalsMonth.containsKey(old)) { goalsMonth.put(nw, goalsMonth.remove(old)); }
-        if (streakBest.containsKey(old)) { streakBest.put(nw, streakBest.remove(old)); }
-        if (goalDays.containsKey(old))   { goalDays.put(nw, goalDays.remove(old)); }
-        if (archived.remove(old))        { archived.add(nw); }
-        if (areaType.containsKey(old))   { areaType.put(nw, areaType.remove(old)); }
-        if (subFocos.containsKey(old))   { subFocos.put(nw, subFocos.remove(old)); }
-        weekPlan.values().forEach(l -> l.replaceAll(a -> old.equals(a) ? nw : a));
-        for (ChecklistItem it : checklist) if (it.subject.equals(old)) it.subject = nw;
-        if (examDate.containsKey(old))   { examDate.put(nw, examDate.remove(old)); }
-        refreshCombo(); subjectComboBox.setSelectedItem(old.equals(cur) ? nw : cur); saveChecklist(); updateUI();
     }
 
     private void changeSubjectColor(String s) {
@@ -3225,8 +3167,7 @@ public class StudyTracker extends JFrame {
 
     private void archiveSubject(String s) {
         if (s == null || !studyDataMap.containsKey(s) || blockIfRunning(s)) return;
-        long ativas = studyDataMap.keySet().stream().filter(k -> !archived.contains(k)).count();
-        if (ativas <= 1) { toast("Deixe ao menos uma matéria ativa."); return; }
+        if (!areas.canArchive(s)) { toast("Deixe ao menos uma matéria ativa."); return; }
         int r = JOptionPane.showConfirmDialog(this,
                 "Arquivar \"" + s + "\"?\nEla sai da lista, mas o tempo e o histórico são mantidos.\n"
               + "Para reativar, use \"Reativar\" na tela Áreas.",
@@ -3239,12 +3180,9 @@ public class StudyTracker extends JFrame {
 
     private void deleteSubject(String s) {
         if (s == null || !studyDataMap.containsKey(s) || blockIfRunning(s)) return;
-        if (!archived.contains(s)
-                && studyDataMap.keySet().stream().filter(k -> !archived.contains(k)).count() <= 1) {
-            toast("Deixe ao menos uma área ativa."); return;
-        }
+        if (!areas.canDelete(s)) { toast("Deixe ao menos uma área ativa."); return; }
         int r =JOptionPane.showConfirmDialog(this, "Deletar \"" + s + "\"? Todo o tempo será perdido.", "Deletar Matéria", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
-        if (r == JOptionPane.YES_OPTION) { studyDataMap.remove(s); goals.remove(s); goalsMin.remove(s); goalsWeek.remove(s); goalsMonth.remove(s); streakBest.remove(s); goalDays.remove(s); examDate.remove(s); archived.remove(s); areaType.remove(s); subFocos.remove(s); weekPlan.values().forEach(l -> l.remove(s)); weekPlan.values().removeIf(java.util.List::isEmpty); checklist.removeIf(it -> it.subject.equals(s)); saveChecklist(); refreshCombo(); updateUI(); }
+        if (r == JOptionPane.YES_OPTION) { areas.delete(s); saveChecklist(); refreshCombo(); updateUI(); }
     }
 
     // ── HISTÓRICO ───────────────────────────────────────────────────────────
@@ -4061,12 +3999,7 @@ public class StudyTracker extends JFrame {
                 JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
         String input = r == JOptionPane.OK_OPTION ? f.getText() : null;
         if (input == null || input.trim().isEmpty()) { System.exit(0); return; }
-        int idx = 0;
-        for (String s : input.split(",")) {
-            String t = AppTheme.semHtml(s.trim());
-            if (!t.isEmpty() && !studyDataMap.containsKey(t))
-                studyDataMap.put(t, new StudyData(0, AppTheme.nextColor(idx++)));
-        }
+        areas.addInitial(input);
         if (studyDataMap.isEmpty()) { System.exit(0); }
     }
 
