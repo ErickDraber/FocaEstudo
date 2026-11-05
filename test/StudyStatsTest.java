@@ -149,6 +149,10 @@ public class StudyStatsTest {
           eq("weeklyGoalFor geral (sem arquivadas)", 590, s.weeklyGoalFor(null));
           eq("scheduledDaysInMonth A (nov/2026: 13 seg/qua/sex)", 13, s.scheduledDaysInMonth("A", HOJE));
           eq("monthlyGoalFor A", 390, s.monthlyGoalFor("A"));
+          eq("monthlyGoalFor B (30 dias)", 600, s.monthlyGoalFor("B"));
+          eq("scheduledDaysInMonth B fev/2027 (28, não vaza p/ março)", 28, s.scheduledDaysInMonth("B", LocalDate.of(2027, 2, 10)));
+          eq("scheduledDaysInMonth B fev/2028 bissexto", 29, s.scheduledDaysInMonth("B", LocalDate.of(2028, 2, 10)));
+          eq("scheduledDaysInMonth B dez/2026 (31)", 31, s.scheduledDaysInMonth("B", LocalDate.of(2026, 12, 5)));
           t.goalsMonth.put("B", 1000);
           eq("monthlyGoalFor B definida manda", 1000, s.monthlyGoalFor("B"));
         }

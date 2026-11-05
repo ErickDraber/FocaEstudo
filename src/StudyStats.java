@@ -135,7 +135,8 @@ final class StudyStats {
     int scheduledDaysInMonth(String subject, LocalDate ref) {
         int n = 0;
         LocalDate d = ref.withDayOfMonth(1);
-        for (int i = 0; i < d.lengthOfMonth(); i++, d = d.plusDays(1))
+        int diasNoMes = d.lengthOfMonth();   // fixo: 'd' avança e entraria no mês seguinte (bug antigo)
+        for (int i = 0; i < diasNoMes; i++, d = d.plusDays(1))
             if (isGoalDay(subject, d)) n++;
         return n;
     }
