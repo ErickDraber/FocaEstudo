@@ -2183,6 +2183,40 @@ public class StudyTracker extends JFrame {
         });
     }
 
+    /**
+     * Põe botões e rótulos do cronômetro e do Pomodoro de acordo com o estado dos modelos.
+     * Necessário depois de rebuildUI() (trocar tema, importar backup): antes, uma sessão
+     * rodando voltava com "Iniciar" ligado, "Pausar" desligado e o combo de matéria livre.
+     */
+    private void syncTimerControls() {
+        boolean swOn = sw.isRunning();
+        updateStopwatchLabel();
+        startButton.setText(sw.started() ? "Retomar" : "Iniciar");
+        startButton.setEnabled(!swOn);
+        stopButton.setEnabled(swOn);
+        submitButton.setEnabled(!swOn && sw.hasTime());
+        resetStopwatchButton.setEnabled(swOn || sw.hasTime());
+
+        boolean pomoOn = pomo.isActive();
+        startFocusButton.setEnabled(!pomoOn);
+        startBreakButton.setEnabled(!pomoOn);
+        stopCountdownButton.setEnabled(pomoOn);
+        stopCountdownButton.setText(pomo.isPaused() ? "Retomar" : "Pausar");
+        resetButton.setEnabled(pomoOn);
+        if (pomoOn) {
+            updateCountdownLabel();
+            if (pomo.isPaused()) {
+                statusLabel.setText("Pausado"); statusLabel.setForeground(AppTheme.WARNING);
+            } else if (pomo.isFocus()) {
+                statusLabel.setText("Focando em " + subjectComboBox.getSelectedItem() + "…");
+                statusLabel.setForeground(AppTheme.SUCCESS);
+            } else {
+                statusLabel.setText("Em pausa…"); statusLabel.setForeground(AppTheme.ACCENT);
+            }
+        }
+        subjectComboBox.setEnabled(!swOn && !pomoOn);   // sessão contando: o tempo não pode mudar de área
+    }
+
     // ── STOPWATCH ───────────────────────────────────────────────────────────
 
     private void startStopwatch() {
@@ -3448,6 +3482,7 @@ public class StudyTracker extends JFrame {
         if (sel != null && studyDataMap.containsKey(sel) && !archived.contains(sel))
             subjectComboBox.setSelectedItem(sel);   // o listener do combo atualiza sub-foco e metas
         updateUI();
+        syncTimerControls();   // buildUI() recria as abas "paradas"; volta botões e rótulos ao estado real
         revalidate();
         repaint();
     }
