@@ -77,13 +77,19 @@ final class Areas {
 
     enum Rename { OK, UNCHANGED, EXISTS }
 
-    /** Renomeia a área em todas as coleções (mesmo comportamento do editSubjectName antigo). */
+    /**
+     * Renomeia a área em todas as coleções, mantendo a posição dela na lista.
+     * As sessões do histórico vão junto (antes ficavam com o nome antigo: a área
+     * renomeada perdia o "feito hoje", a sequência e o histórico nas estatísticas).
+     */
     Rename rename(String old, String nw) {
         if (old == null || !studyDataMap.containsKey(old) || nw == null || nw.isEmpty() || nw.equals(old))
             return Rename.UNCHANGED;
         if (studyDataMap.containsKey(nw)) return Rename.EXISTS;
 
-        studyDataMap.put(nw, studyDataMap.remove(old));
+        Map<String, StudyData> tmp = new LinkedHashMap<>(studyDataMap);
+        studyDataMap.clear();
+        tmp.forEach((k, v) -> studyDataMap.put(k.equals(old) ? nw : k, v));
 
         for (Map<String, ?> m : Arrays.<Map<String, ?>>asList(goals, goalsMin, goalsWeek, goalsMonth, streakBest,
                 goalDays, examDate, areaType, subFocos))
@@ -91,6 +97,12 @@ final class Areas {
         if (archived.remove(old)) archived.add(nw);
         weekPlan.values().forEach(l -> l.replaceAll(a -> old.equals(a) ? nw : a));
         for (ChecklistItem it : checklist) if (it.subject.equals(old)) it.subject = nw;
+        for (int i = 0; i < sessions.size(); i++) {
+            StudySession s = sessions.get(i);
+            if (s.getSubject().equals(old))
+                sessions.set(i, new StudySession(nw, s.getMinutes(), s.getTimestamp(), s.getType(),
+                        s.getNote(), s.getKind(), s.getEnergy()));
+        }
         return Rename.OK;
     }
 

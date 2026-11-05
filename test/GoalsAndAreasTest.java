@@ -131,6 +131,7 @@ public class GoalsAndAreasTest {
           t.weekPlan.get("1_m").add("Outra");
           Areas a = t.areas();
           eq("rename: ok", Areas.Rename.OK, a.rename("Calculo", "Cálculo"));
+          eq("rename: mantém a ordem", Arrays.asList("Cálculo", "Física", "Zeta"), new ArrayList<>(t.studyDataMap.keySet()));
           eq("rename: tempo", 100, t.studyDataMap.get("Cálculo").getMinutes());
           eq("rename: meta", 60, t.goals.get("Cálculo"));
           eq("rename: mínimo", 20, t.goalsMin.get("Cálculo"));
@@ -144,6 +145,11 @@ public class GoalsAndAreasTest {
           eq("rename: sub-focos", Arrays.asList("Peito", "Costas"), t.subFocos.get("Cálculo"));
           eq("rename: plano da semana", Arrays.asList("Cálculo", "Física", "Zeta", "Outra"), t.weekPlan.get("1_m"));
           eq("rename: tarefa", "Cálculo", t.checklist.get(0).subject);
+          eq("rename: sessões vão junto (antes ficavam órfãs)", "Cálculo", t.sessions.get(0).getSubject());
+          StudySession s = t.sessions.get(0);
+          eq("rename: sessão mantém os outros campos", "30|1000|manual|nota|cap 1|2",
+                  s.getMinutes() + "|" + s.getTimestamp() + "|" + s.getType() + "|" + s.getNote() + "|" + s.getKind() + "|" + s.getEnergy());
+          eq("rename: outras sessões intactas", "Física", t.sessions.get(1).getSubject());
           for (Map<String, ?> m : Arrays.<Map<String, ?>>asList(t.studyDataMap, t.goals, t.goalsMin, t.goalsWeek,
                   t.goalsMonth, t.streakBest, t.goalDays, t.examDate, t.areaType, t.subFocos))
               eq("rename: nome antigo some de todas as coleções", false, m.containsKey("Calculo"));
@@ -152,7 +158,7 @@ public class GoalsAndAreasTest {
           eq("rename: mesmo nome", Areas.Rename.UNCHANGED, a.rename("Física", "Física"));
           eq("rename: vazio", Areas.Rename.UNCHANGED, a.rename("Física", ""));
           eq("rename: área inexistente", Areas.Rename.UNCHANGED, a.rename("Nada", "Algo"));
-          eq("rename recusado não mexe", new HashSet<>(Arrays.asList("Cálculo", "Física", "Zeta")), new HashSet<>(t.studyDataMap.keySet()));
+          eq("rename recusado não mexe", Arrays.asList("Cálculo", "Física", "Zeta"), new ArrayList<>(t.studyDataMap.keySet()));
         }
 
         // ── Areas: apagar tira de TUDO (menos o histórico de sessões) ───────

@@ -3144,7 +3144,7 @@ public class StudyTracker extends JFrame {
             case OK:
                 String nw = Areas.cleanName(fName.getText());
                 refreshCombo(); subjectComboBox.setSelectedItem(old.equals(cur) ? nw : cur);
-                saveChecklist(); updateUI();
+                saveChecklist(); saveSessions(); updateUI();   // sessões agora vão junto no rename
         }
     }
 
