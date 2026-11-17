@@ -46,10 +46,6 @@ public class StudyTracker extends JFrame {
     // --- Ajustes + marcadores "já mostrei" (persistidos em study_data como __chave__; ver AppSettings) ---
     private final AppSettings cfg = new AppSettings();
 
-    // --- Recorrências ---
-    private Timer   reminderTimer;
-    private java.awt.TrayIcon trayIcon;
-
     // --- Detalhes da sessão: perguntados AO TERMINAR, não antes (menos decisões para começar) ---
     private String pendingSubFoco;   // sub-foco já escolhido (ex.: rodízio do "Agora"); vem marcado no "Como foi?"
     private static final String[] ENERGY_TEXT = {"", "Baixa", "Ok", "Alta"};
@@ -109,6 +105,16 @@ public class StudyTracker extends JFrame {
 
     // Regras do plano da semana (turnos planejados, "Preencher pelas metas"). Mesmas coleções.
     private final WeekPlan planRules = new WeekPlan(weekPlan, studyDataMap, archived, goalDays, stats, this::typeOf);
+
+    // Avisos automáticos: versão nova, lembrete diário (bandeja) e resumo da semana. Mesmas coleções.
+    private final Notices notices = new Notices(this, cfg, stats, studyDataMap.keySet(), sessions, new Notices.Host() {
+        public void save()             { saveData(); }
+        public void toast(String msg)  { StudyTracker.this.toast(msg); }
+        public void trayClicked() {
+            if (focusBar != null) { exitFocusMode(); return; }
+            setVisible(true); setState(Frame.NORMAL); toFront();
+        }
+    });
 
     // --- Estado de persistência ---
     private boolean ready  = false;  // true quando a UI terminou de carregar
@@ -2124,169 +2130,10 @@ public class StudyTracker extends JFrame {
                   + DATA_DIR.getAbsolutePath() + "\n\n"
                   + "Assim você pode atualizar o FocaEstudo sem perder nada.\n"
                   + "Os arquivos antigos continuam na pasta do programa, sem uso.");
-        SwingUtilities.invokeLater(this::maybeShowWeeklySummary);
-        setupReminder();
+        SwingUtilities.invokeLater(notices::maybeShowWeeklySummary);
+        notices.setupReminder();
         startTodayTimer();
-        maybeCheckForUpdate();
-    }
-
-    // ── AVISO DE VERSÃO NOVA ───────────────────────────────────────────────
-
-    private static final String RELEASES_LATEST = "https://github.com/ErickDraber/FocaEstudo/releases/latest";
-
-    /** No máximo 1× por dia, pergunta ao GitHub qual é a última versão. Não envia dado nenhum. */
-    private void maybeCheckForUpdate() {
-        String atual = System.getProperty("jpackage.app-version");   // só existe no .exe
-        if (!cfg.updateCheck || atual == null) return;
-        String hoje = LocalDate.now().toString();
-        if (hoje.equals(cfg.updateCheckedDay)) return;
-        Thread t = new Thread(() -> {
-            String nova = fetchLatestVersion();
-            if (nova == null) return;   // sem internet: tenta de novo na próxima abertura
-            SwingUtilities.invokeLater(() -> {
-                cfg.updateCheckedDay = hoje;
-                saveData();
-                if (compareVersions(nova, atual) > 0) showUpdateDialog(atual, nova);
-            });
-        }, "FocaEstudo-atualizacao");
-        t.setDaemon(true);
-        t.start();
-    }
-
-    /** O GitHub redireciona /releases/latest para /releases/tag/vX.Y.Z: a versão vem do endereço. */
-    private static String fetchLatestVersion() {
-        java.net.HttpURLConnection con = null;
-        try {
-            con = (java.net.HttpURLConnection) java.net.URI.create(RELEASES_LATEST).toURL().openConnection();
-            con.setInstanceFollowRedirects(false);
-            con.setRequestMethod("HEAD");
-            con.setConnectTimeout(5000);
-            con.setReadTimeout(5000);
-            con.setRequestProperty("User-Agent", "FocaEstudo");
-            String loc = con.getHeaderField("Location");
-            if (loc == null) return null;
-            java.util.regex.Matcher m = java.util.regex.Pattern
-                    .compile("/releases/tag/v?(\\d{1,4}\\.\\d{1,4}\\.\\d{1,4})$").matcher(loc);
-            return m.find() ? m.group(1) : null;
-        } catch (Exception e) {
-            return null;
-        } finally {
-            if (con != null) con.disconnect();
-        }
-    }
-
-    /** Compara "1.10.0" com "1.9.2" número a número. */
-    private static int compareVersions(String a, String b) {
-        String[] x = a.split("\\."), y = b.split("\\.");
-        for (int i = 0; i < Math.max(x.length, y.length); i++) {
-            int dx = 0, dy = 0;
-            try { if (i < x.length) dx = Integer.parseInt(x[i].trim()); } catch (NumberFormatException ignored) {}
-            try { if (i < y.length) dy = Integer.parseInt(y[i].trim()); } catch (NumberFormatException ignored) {}
-            if (dx != dy) return Integer.compare(dx, dy);
-        }
-        return 0;
-    }
-
-    private void showUpdateDialog(String atual, String nova) {
-        Object[] opts = {"Abrir página de download", "Agora não"};
-        int r = JOptionPane.showOptionDialog(this,
-                "Saiu a versão " + nova + " do FocaEstudo (você está usando a " + atual + ").\n\n"
-              + "Para atualizar: baixe o zip, feche o FocaEstudo e extraia por cima da pasta atual.\n"
-              + "Seus dados ficam guardados fora da pasta do programa, então nada se perde.",
-                "Versão nova", JOptionPane.DEFAULT_OPTION, JOptionPane.INFORMATION_MESSAGE,
-                null, opts, opts[0]);
-        if (r != 0) return;
-        try { Desktop.getDesktop().browse(java.net.URI.create(RELEASES_LATEST)); }
-        catch (Exception e) { showInfoDialog("Versão nova", "Baixe em:\n" + RELEASES_LATEST); }
-    }
-
-    // ── LEMBRETE DIÁRIO (item 8) ───────────────────────────────────────────
-
-    private void setupReminder() {
-        if (java.awt.SystemTray.isSupported()) {
-            try {
-                trayIcon = new java.awt.TrayIcon(AppTheme.appIcon(16), "FocaEstudo");
-                trayIcon.setImageAutoSize(true);
-                trayIcon.addActionListener(e -> {
-                    if (focusBar != null) { exitFocusMode(); return; }
-                    setVisible(true); setState(Frame.NORMAL); toFront();
-                });
-                java.awt.SystemTray.getSystemTray().add(trayIcon);
-            } catch (Exception e) { trayIcon = null; }
-        }
-        reminderTimer = new Timer(5 * 60 * 1000, e -> checkReminder());
-        reminderTimer.setInitialDelay(30 * 1000);
-        reminderTimer.start();
-    }
-
-    private void checkReminder() {
-        if (cfg.reminderHour < 0) return;
-        LocalDate today = LocalDate.now();
-        String hoje = today.toString();
-        if (hoje.equals(cfg.reminderShownDay)) return;
-        if (isHardDay(today)) { cfg.reminderShownDay = hoje; return; }             // dia difícil: sem lembrete
-        if (java.time.LocalTime.now().getHour() < cfg.reminderHour) return;
-        if (minutesOnDay(null, today) > 0) { cfg.reminderShownDay = hoje; return; } // já estudou hoje
-
-        cfg.reminderShownDay = hoje;
-        saveData();
-        String msg = "Que tal uns minutos de estudo hoje? Sua sequência agradece. 🔥";
-        if (trayIcon != null) {
-            trayIcon.displayMessage("FocaEstudo", msg, java.awt.TrayIcon.MessageType.INFO);
-        } else {
-            toast(msg);
-        }
-    }
-
-    // ── RESUMO SEMANAL (item 7) ─────────────────────────────────────────────
-
-    private void maybeShowWeeklySummary() {
-        if (sessions.isEmpty()) return;
-        LocalDate today = LocalDate.now();
-        java.time.temporal.WeekFields wf = java.time.temporal.WeekFields.ISO;
-        String semana = today.get(wf.weekBasedYear()) + "-W" + today.get(wf.weekOfWeekBasedYear());
-        if (semana.equals(cfg.weeklySummaryShownWeek)) return;
-        // só mostra a partir de sábado/domingo (fim de semana) ou se nunca mostrou
-        if (cfg.weeklySummaryShownWeek != null
-                && today.getDayOfWeek().getValue() < 6) return;
-
-        cfg.weeklySummaryShownWeek = semana;
-        saveData();
-
-        LocalDate ini = today.minusDays(6);
-        int totalSemana = minutesInRange(null, ini, today);
-        if (totalSemana == 0) return;
-
-        int totalAnterior = minutesInRange(null, ini.minusDays(7), today.minusDays(7));
-        int diasMeta = 0, diasComEstudo = 0;
-        String topSubj = null; int topMin = 0;
-        for (String s : studyDataMap.keySet()) {
-            int m = minutesInRange(s, ini, today);
-            if (m > topMin) { topMin = m; topSubj = s; }
-        }
-        int metaDia = dailyGoalFor(null);
-        for (LocalDate d = ini; !d.isAfter(today); d = d.plusDays(1)) {
-            int m = minutesOnDay(null, d);
-            if (m > 0) diasComEstudo++;
-            if (metaDia > 0 && m >= metaDia) diasMeta++;
-        }
-
-        StringBuilder sb = new StringBuilder();
-        sb.append("Últimos 7 dias\n\n");
-        sb.append("• Total estudado: ").append(fmtHM(totalSemana)).append('\n');
-        sb.append("• Dias com estudo: ").append(diasComEstudo).append(" de 7\n");
-        if (metaDia > 0) sb.append("• Meta diária batida em ").append(diasMeta).append(" de 7 dias\n");
-        if (topSubj != null) sb.append("• Matéria destaque: ").append(topSubj)
-                .append(" (").append(fmtHM(topMin)).append(")\n");
-        if (totalAnterior > 0) {
-            int d = totalSemana - totalAnterior;
-            sb.append("• vs. semana anterior: ")
-              .append(d >= 0 ? "▲ +" + fmtHM(d) : "▼ " + fmtHM(-d)).append('\n');
-        }
-        sb.append("\nBora manter o ritmo!");
-
-        JOptionPane.showMessageDialog(this, sb.toString(),
-                "Resumo da semana", JOptionPane.INFORMATION_MESSAGE);
+        notices.maybeCheckForUpdate();
     }
 
     private void promptForSubjects() {
