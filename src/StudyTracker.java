@@ -131,6 +131,16 @@ public class StudyTracker extends JFrame {
         public void saveChecklist()         { StudyTracker.this.saveChecklist(); }
     }, AreaDialogs.swingPrompt(this));
 
+    // Ajustes, exportar/importar backup e tema. Grava no mesmo cfg; recarregar e reconstruir ficam aqui.
+    private final SettingsDialogs settingsDialogs = new SettingsDialogs(cfg, STORE, new SettingsDialogs.Host() {
+        public void saveData()              { StudyTracker.this.saveData(); }
+        public void saveAll()               { StudyTracker.this.saveData(); saveSessions(); saveChecklist(); }
+        public void reloadFromDisk()        { StudyTracker.this.reloadFromDisk(); }
+        public void rebuildUI()             { StudyTracker.this.rebuildUI(); }
+        public void setAutoCycle(boolean on) { if (timerCard != null) timerCard.setAutoCycle(on); }
+        public void toast(String msg)       { StudyTracker.this.toast(msg); }
+    }, SettingsDialogs.swingPrompt(this));
+
     // --- Estado de persistência ---
     private boolean ready  = false;  // true quando a UI terminou de carregar
     private boolean loadOk = true;   // false se a leitura do save falhou (bloqueia gravação)
@@ -262,7 +272,7 @@ public class StudyTracker extends JFrame {
         sideNav.addAction("Tarefas", () -> new ChecklistPanel(this, checklist, studyDataMap, () -> {
             saveChecklist(); refreshProgressCard();
         }).setVisible(true));
-        sideNav.addAction("Ajustes", this::showSettingsDialog);
+        sideNav.addAction("Ajustes", settingsDialogs::showSettings);
         sideNav.addAction("Tema",    this::toggleTheme);
         return sideNav;
     }
@@ -1107,57 +1117,7 @@ public class StudyTracker extends JFrame {
         }).setVisible(true);
     }
 
-    // ── EXPORTAR / IMPORTAR ─────────────────────────────────────────────────
-
-    private void exportData() {
-        saveData(); saveSessions(); saveChecklist();   // garante que o disco está atualizado
-        JFileChooser fc = new JFileChooser();          // abre em Documentos
-        fc.setSelectedFile(new File("focaestudo-backup-"
-                + java.time.LocalDate.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd"))
-                + ".txt"));
-        if (fc.showSaveDialog(this) != JFileChooser.APPROVE_OPTION) return;
-        try {
-            java.nio.file.Files.write(fc.getSelectedFile().toPath(),
-                    STORE.exportText().getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            toast("Backup exportado.");
-        } catch (IOException e) {
-            JOptionPane.showMessageDialog(this, "Falha ao exportar: " + e.getMessage());
-        }
-    }
-
-    private void importData() {
-        JFileChooser fc = new JFileChooser();
-        if (fc.showOpenDialog(this) != JFileChooser.APPROVE_OPTION) return;
-        if (fc.getSelectedFile().length() > StudyStore.MAX_IMPORT_BYTES) {
-            JOptionPane.showMessageDialog(this, "Arquivo grande demais para ser um backup do FocaEstudo.");
-            return;
-        }
-        try {
-            String all = new String(java.nio.file.Files.readAllBytes(fc.getSelectedFile().toPath()),
-                    java.nio.charset.StandardCharsets.UTF_8);
-            StudyStore.Backup b = StudyStore.parseBackup(all);
-            if (b == null) {
-                JOptionPane.showMessageDialog(this, "Arquivo não parece um backup do FocaEstudo.");
-                return;
-            }
-            if (StudyStore.countSubjects(b.dados) == 0) {
-                JOptionPane.showMessageDialog(this, "O backup não tem matérias válidas — importação cancelada.");
-                return;
-            }
-
-            int r = JOptionPane.showConfirmDialog(this,
-                    "Isto substitui TODas as matérias, metas e histórico atuais pelos do arquivo.\n"
-                  + "Seus dados atuais vão para .bak. Continuar?",
-                    "Importar dados", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
-            if (r != JOptionPane.YES_OPTION) return;
-
-            STORE.importBackup(b);
-            reloadFromDisk();
-            toast("Dados importados.");
-        } catch (Exception e) {
-            JOptionPane.showMessageDialog(this, "Falha ao importar: " + e.getMessage());
-        }
-    }
+    // ── EXPORTAR / IMPORTAR (os diálogos ficam no SettingsDialogs) ──────────
 
     /** Recarrega tudo dos arquivos (após importar). */
     private void reloadFromDisk() {
@@ -1183,133 +1143,9 @@ public class StudyTracker extends JFrame {
         saveData();
     }
 
-    // ── AJUSTES ─────────────────────────────────────────────────────────────
+    // ── TEMA (a escolha fica no SettingsDialogs; aqui, reconstruir a tela) ──
 
-    private void showSettingsDialog() {
-        JSpinner spFocus = new JSpinner(new SpinnerNumberModel(cfg.minFocusMin, 0, 60, 1));
-        JSpinner spIdle  = new JSpinner(new SpinnerNumberModel(cfg.idleMinutes, 0, 120, 1));
-        JSpinner spTrans = new JSpinner(new SpinnerNumberModel(cfg.transitionMin, 0, 30, 1));
-        JSpinner spHyper = new JSpinner(new SpinnerNumberModel(cfg.hyperfocusH, 0, 12, 1));
-        JCheckBox cbCycle = new JCheckBox("Encadear foco → pausa → foco automaticamente", cfg.pomoAutoCycle);
-        cbCycle.setOpaque(false);
-
-        JPanel panel = new JPanel(new GridBagLayout());
-        GridBagConstraints c = new GridBagConstraints();
-        c.insets = new Insets(4, 4, 4, 4);
-        c.anchor = GridBagConstraints.WEST;
-
-        int row = 0;
-        addFormRow(panel, c, row++, "Foco mínimo (min):", spFocus);
-        c.gridx = 0; c.gridy = row++; c.gridwidth = 2;
-        panel.add(dlgHint("Sessões de cronômetro/pomodoro abaixo disso não são salvas."), c);
-        c.gridwidth = 1;
-
-        addFormRow(panel, c, row++, "Inatividade (min):", spIdle);
-        c.gridx = 0; c.gridy = row++; c.gridwidth = 2;
-        panel.add(dlgHint("Sem mexer no PC por esse tempo, o cronômetro pausa e pergunta.  0 = desligado."), c);
-        c.gridwidth = 1;
-
-        addFormRow(panel, c, row++, "Pausa entre blocos (min):", spTrans);
-        c.gridx = 0; c.gridy = row++; c.gridwidth = 2;
-        panel.add(dlgHint("Sugestão de pausa depois de salvar um bloco do cronômetro.  0 = desligado."), c);
-        c.gridwidth = 1;
-
-        addFormRow(panel, c, row++, "Aviso de hiperfoco (h):", spHyper);
-        c.gridx = 0; c.gridy = row++; c.gridwidth = 2;
-        panel.add(dlgHint("Aviso pra respirar depois de N horas seguidas de cronômetro.  0 = desligado."), c);
-        c.gridwidth = 1;
-
-        JComboBox<String> cbReminder = new JComboBox<>();
-        cbReminder.addItem("Desligado");
-        for (int hRem = 5; hRem <= 23; hRem++) cbReminder.addItem(String.format("%02d:00", hRem));
-        cbReminder.setSelectedItem(cfg.reminderHour < 0 ? "Desligado" : String.format("%02d:00", cfg.reminderHour));
-        addFormRow(panel, c, row++, "Lembrete diário:", cbReminder);
-        c.gridx = 0; c.gridy = row++; c.gridwidth = 2;
-        panel.add(dlgHint("Se não tiver estudado até essa hora, o app avisa (notificação do Windows)."), c);
-
-        JCheckBox cbAsk = new JCheckBox("Ao terminar, perguntar sub-foco, energia e nota", cfg.askDetails);
-        cbAsk.setOpaque(false);
-        JCheckBox cbFocus = new JCheckBox("Ao começar uma sessão, recolher a janela numa faixa pequena", cfg.focusMode);
-        cbFocus.setOpaque(false);
-        c.gridx = 0; c.gridy = row++; c.gridwidth = 2; c.insets = new Insets(12, 4, 2, 4);
-        panel.add(dlgLabel("Modo foco", true), c);
-        c.gridy = row++; c.insets = new Insets(2, 4, 4, 4);
-        panel.add(cbFocus, c);
-        c.gridy = row++; c.insets = new Insets(0, 4, 4, 4);
-        panel.add(dlgHint("A faixa fica por cima das outras janelas, com o tempo e a meta de hoje. \"Abrir app\" volta para a tela cheia."), c);
-        c.gridy = row++; c.insets = new Insets(8, 4, 4, 4);
-        panel.add(cbAsk, c);
-        c.gridy = row++; c.insets = new Insets(0, 4, 4, 4);
-        panel.add(dlgHint("Tudo opcional: Enter salva. Desligado, salva direto (com o sub-foco sugerido, se houver)."), c);
-
-        c.gridx = 0; c.gridy = row++; c.gridwidth = 2; c.insets = new Insets(12, 4, 2, 4);
-        panel.add(dlgLabel("Pomodoro", true), c);
-        c.gridy = row++; c.insets = new Insets(2, 4, 4, 4);
-        panel.add(cbCycle, c);
-
-        c.gridx = 0; c.gridy = row++; c.gridwidth = 2; c.insets = new Insets(12, 4, 2, 4);
-        panel.add(dlgLabel("Backup", true), c);
-        JPanel backupRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
-        JButton btnExport = new JButton("Exportar dados…");
-        JButton btnImport = new JButton("Importar dados…");
-        JButton btnFolder = new JButton("Abrir pasta dos dados");
-        btnExport.setFocusPainted(false); btnImport.setFocusPainted(false); btnFolder.setFocusPainted(false);
-        btnExport.addActionListener(e -> exportData());
-        btnImport.addActionListener(e -> importData());
-        btnFolder.addActionListener(e -> {
-            try { Desktop.getDesktop().open(DATA_DIR); }
-            catch (Exception ex) { showInfoDialog("Pasta dos dados", DATA_DIR.getAbsolutePath()); }
-        });
-        backupRow.add(btnExport); backupRow.add(btnImport); backupRow.add(btnFolder);
-        c.gridy = row++; c.insets = new Insets(2, 4, 4, 4);
-        panel.add(backupRow, c);
-        c.gridy = row++; c.insets = new Insets(0, 4, 4, 4);
-        panel.add(dlgHint("Um arquivo único com matérias + histórico, para backup ou levar a outro PC."), c);
-
-        JCheckBox cbUpdate = new JCheckBox("Avisar quando sair uma versão nova", cfg.updateCheck);
-        cbUpdate.setOpaque(false);
-        c.gridy = row++; c.insets = new Insets(12, 4, 2, 4);
-        panel.add(dlgLabel("Atualizações", true), c);
-        c.gridy = row++; c.insets = new Insets(2, 4, 4, 4);
-        panel.add(cbUpdate, c);
-        c.gridy = row++; c.insets = new Insets(0, 4, 4, 4);
-        panel.add(dlgHint("Consulta o GitHub no máximo 1× por dia. Nenhum dado seu é enviado."), c);
-
-        int r = JOptionPane.showConfirmDialog(this, panel, "Ajustes",
-                JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
-        if (r != JOptionPane.OK_OPTION) return;
-
-        cfg.minFocusMin   = (int) spFocus.getValue();
-        cfg.idleMinutes   = (int) spIdle.getValue();
-        cfg.transitionMin = (int) spTrans.getValue();
-        cfg.hyperfocusH   = (int) spHyper.getValue();
-        cfg.pomoAutoCycle = cbCycle.isSelected();
-        cfg.focusMode     = cbFocus.isSelected();
-        cfg.askDetails    = cbAsk.isSelected();
-        cfg.updateCheck   = cbUpdate.isSelected();
-        String rem = (String) cbReminder.getSelectedItem();
-        cfg.reminderHour = (rem == null || rem.startsWith("Des")) ? -1 : Integer.parseInt(rem.substring(0, 2));
-        if (timerCard != null) timerCard.setAutoCycle(cfg.pomoAutoCycle);
-        saveData();
-        toast("Ajustes salvos.");
-    }
-
-    // ── TEMA ────────────────────────────────────────────────────────────────
-
-    private void toggleTheme() {
-        String[] options = {"Claro", "Escuro"};
-        int current = AppTheme.dark ? 1 : 0;
-        int choice = JOptionPane.showOptionDialog(this,
-                "Escolha o tema da interface:",
-                "Tema",
-                JOptionPane.DEFAULT_OPTION,
-                JOptionPane.PLAIN_MESSAGE,
-                null, options, options[current]);
-        if (choice < 0) return;
-        if (choice == 0) AppTheme.applyLight();
-        else             AppTheme.applyDark();
-        rebuildUI();
-    }
+    private void toggleTheme() { settingsDialogs.chooseTheme(); }
 
     private void rebuildUI() {
         // Para os tiques antigos; o estado das sessões está nos modelos (sw, pomo).
