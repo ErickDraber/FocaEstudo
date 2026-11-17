@@ -25,20 +25,11 @@ public class StudyTracker extends JFrame {
     private final List<ChecklistItem>     checklist    = new ArrayList<>();
 
     // --- UI principal ---
-    private PieChartPanel chartPanel;
-    private CalendarPanel  calendarPanel;
-    private JPanel        summaryPanel;
     private JComboBox<String> subjectComboBox;
     private JLabel        tvTotal;
     private JPanel        goalBar;
     private GaugeBar      goalProgress;
     private JLabel        tvGoalLabel, tvGoalPercent;
-    private RoundedPanel  progressCard;
-    private JPanel        progressBody;
-    private RoundedPanel  goalsCard;
-    private JPanel        goalsBody;
-    private RoundedPanel  balanceCard;
-    private JPanel        balanceBody;
     private RoundedPanel  nowCard;
     private JPanel        nowBody;
     private CustomTabs    bottomTabs;
@@ -93,8 +84,8 @@ public class StudyTracker extends JFrame {
 
     // --- Áreas: tipo de cada área ("estudo"|"fisico"|"lazer"|"trabalho"|"outro"). Ausente = "estudo". ---
     private final Map<String, String> areaType = new LinkedHashMap<>();
-    private static final String[] TYPE_KEYS   = {"estudo", "fisico", "lazer", "trabalho", "outro"};
-    private static final String[] TYPE_LABELS = {"Estudo", "Físico", "Lazer", "Trabalho", "Outro"};
+    private static final String[] TYPE_KEYS   = AreaTypes.KEYS;
+    private static final String[] TYPE_LABELS = AreaTypes.LABELS;
     // Meta mínima semanal por TIPO (minutos). 0/ausente = sem meta de equilíbrio.
     private final Map<String, Integer> typeGoalWeek = new LinkedHashMap<>();
 
@@ -231,6 +222,7 @@ public class StudyTracker extends JFrame {
     private String       currentScreen = SCR_HOJE;
     private PlannerPanel weekScreen;
     private AreasScreen  areasScreen;
+    private ProgressScreen progressScreen;
 
     private void buildUI() {
         screens = new JPanel(new CardLayout());
@@ -557,106 +549,35 @@ public class StudyTracker extends JFrame {
         return areasScreen;
     }
 
-    // ── TELA PROGRESSO: donut, números e calendário ────────────────────────
+    // ── TELA PROGRESSO: donut, números e calendário (a tela em si fica no ProgressScreen) ──
 
     private JPanel buildProgressScreen() {
-        StyledButton hist = new StyledButton("Histórico", StyledButton.Variant.TEXT);
-        hist.addActionListener(e -> showHistory());
-        StyledButton stats = new StyledButton("Estatísticas", StyledButton.Variant.TEXT);
-        stats.addActionListener(e -> new StatsPanel(this, sessions, studyDataMap).setVisible(true));
-
-        JPanel p = new JPanel(new BorderLayout());
-        p.setBackground(AppTheme.BG);
-        p.add(ScreenKit.screenHeader("Progresso", null, hist, stats), BorderLayout.NORTH);
-        p.add(buildCenter(), BorderLayout.CENTER);
-        return p;
+        progressScreen = new ProgressScreen(new ProgressScreen.Source() {
+            public Map<String, StudyData> areas()          { return studyDataMap; }
+            public Set<String> archived()                  { return archived; }
+            public String typeOf(String area)              { return StudyTracker.this.typeOf(area); }
+            public StudyStats stats()                      { return stats; }
+            public int bestStreak(String area)             { return StudyTracker.this.bestStreak(area); }
+            public int minutesByType(String t, LocalDate a, LocalDate b) { return minutesByTypeInRange(t, a, b); }
+            public int typeGoalWeek(String type)           { return typeGoalWeek.getOrDefault(type, 0); }
+            public int idealDaily(String area)             { return goals.getOrDefault(area, 0); }
+            public List<String> subFocos(String area)      { return subFocos.get(area); }
+            public LocalDate examDate(String area)         { return examDate.get(area); }
+            public List<ChecklistItem> checklist()         { return checklist; }
+            public String selectedArea()                   { return (String) subjectComboBox.getSelectedItem(); }
+            public List<StudySession> sessions()           { return sessions; }
+            public Map<String, Integer> goals()            { return goals; }
+        }, new ProgressScreen.Actions() {
+            public void history()     { showHistory(); }
+            public void stats()       { new StatsPanel(StudyTracker.this, sessions, studyDataMap).setVisible(true); }
+            public void manageGoals() { showManageGoalsDialog(); }
+            public void typeGoals()   { showTypeGoalsDialog(); }
+        });
+        return progressScreen;
     }
 
-    private JSplitPane buildCenter() {
-        // ── Lado esquerdo: gráfico donut (topo) + progresso (base) ────────────
-        // Antes o progresso ia no BorderLayout.SOUTH e, com várias matérias,
-        // espremia o donut até ele sumir. Agora os dois ficam num split vertical
-        // que garante espaço ao gráfico e deixa o usuário ajustar a divisão.
-        JPanel chartWrapper = new JPanel(new BorderLayout());
-        chartWrapper.setBackground(AppTheme.BG);
-        chartWrapper.setBorder(new EmptyBorder(12, 12, 6, 6));
-        chartPanel = new PieChartPanel();
-        chartPanel.setBorder(new EmptyBorder(8, 8, 8, 8));
-        RoundedPanel chartCard = new RoundedPanel(18, AppTheme.SURFACE);
-        chartCard.setLayout(new BorderLayout());
-        chartCard.add(chartPanel);
-        chartCard.setMinimumSize(new Dimension(160, 200));
-
-        JPanel leftBottom = new JPanel();
-        leftBottom.setLayout(new BoxLayout(leftBottom, BoxLayout.Y_AXIS));
-        leftBottom.setOpaque(false);
-        // Visão de longo prazo: números do período, metas completas (dia/semana/mês) e equilíbrio.
-        JComponent pc = buildProgressCard(); pc.setAlignmentX(Component.LEFT_ALIGNMENT);
-        JComponent gc = buildGoalsCard();    gc.setAlignmentX(Component.LEFT_ALIGNMENT);
-        JComponent bc = buildBalanceCard();  bc.setAlignmentX(Component.LEFT_ALIGNMENT);
-        leftBottom.add(pc);
-        leftBottom.add(Box.createVerticalStrut(12));
-        leftBottom.add(gc);
-        leftBottom.add(Box.createVerticalStrut(12));
-        leftBottom.add(bc);
-        leftBottom.add(Box.createVerticalGlue());
-
-        JScrollPane progressScroll = new JScrollPane(leftBottom,
-                JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED,
-                JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
-        progressScroll.setBorder(null);
-        progressScroll.setOpaque(false);
-        progressScroll.getViewport().setOpaque(false);
-        progressScroll.getVerticalScrollBar().setUnitIncrement(12);
-        progressScroll.setMinimumSize(new Dimension(0, 90));
-
-        JPanel progressHolder = new JPanel(new BorderLayout());
-        progressHolder.setOpaque(false);
-        progressHolder.setBorder(new EmptyBorder(12, 0, 0, 0));
-        progressHolder.add(progressScroll, BorderLayout.CENTER);
-
-        JSplitPane leftSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT, chartCard, progressHolder);
-        leftSplit.setResizeWeight(0.36);   // gráfico em cima, progresso+metas+equilíbrio embaixo (com scroll)
-        leftSplit.setDividerLocation(0.36);
-        leftSplit.setDividerSize(4);
-        leftSplit.setBorder(null);
-        leftSplit.setOpaque(false);
-        chartWrapper.add(leftSplit, BorderLayout.CENTER);
-
-        // Lado direito: calendário
-        JPanel calWrapper = new JPanel(new BorderLayout());
-        calWrapper.setBackground(AppTheme.BG);
-        calWrapper.setBorder(new EmptyBorder(12, 6, 6, 12));
-        RoundedPanel calCard = new RoundedPanel(18, AppTheme.SURFACE);
-        calCard.setLayout(new BorderLayout());
-        calCard.setBorder(new EmptyBorder(12, 12, 12, 12));
-
-        // Monta mapa de cores das matérias
-        Map<String, Color> colorMap = new LinkedHashMap<>();
-        studyDataMap.forEach((k, v) -> colorMap.put(k, v.getColor()));
-        calendarPanel = new CalendarPanel(sessions, goals, colorMap);
-
-        JScrollPane calScroll = new JScrollPane(calendarPanel);
-        calScroll.setBorder(null); calScroll.setOpaque(false);
-        calScroll.getViewport().setOpaque(false);
-        calScroll.getVerticalScrollBar().setUnitIncrement(12);
-
-        calCard.add(calScroll, BorderLayout.CENTER);
-        calWrapper.add(calCard);
-
-        // Resumo agora fica abaixo do gráfico (panel menor)
-        summaryPanel = new JPanel();
-        summaryPanel.setLayout(new BoxLayout(summaryPanel, BoxLayout.Y_AXIS));
-        summaryPanel.setOpaque(false);
-
-        JSplitPane split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, chartWrapper, calWrapper);
-        split.setResizeWeight(0.45);
-        split.setDividerLocation(0.45);
-        split.setDividerSize(4);
-        split.setBorder(null);
-        split.setBackground(AppTheme.BG);
-        return split;
-    }
+    /** Também chamado quando a área do combo muda ou as tarefas mudam. */
+    private void refreshProgressCard() { if (progressScreen != null) progressScreen.refreshProgressCard(); }
 
     private JPanel buildBottom() {
         JPanel outer = new JPanel(new BorderLayout(0, 0));
@@ -988,109 +909,6 @@ public class StudyTracker extends JFrame {
         return null;
     }
 
-    /** Cartão "Equilíbrio" — tempo da semana por tipo de área (Estudo/Físico/Lazer/Trabalho). */
-    private JComponent buildBalanceCard() {
-        balanceCard = new RoundedPanel(18, AppTheme.SURFACE);
-        balanceCard.setLayout(new BorderLayout(0, 8));
-        balanceCard.setBorder(new EmptyBorder(14, 16, 14, 16));
-
-        JLabel title = new JLabel("Equilíbrio · esta semana");
-        title.setFont(AppTheme.FONT_SECTION);
-        title.setForeground(AppTheme.TEXT_PRI);
-
-        StyledButton metas = new StyledButton("Metas…", StyledButton.Variant.TEXT);
-        metas.setFont(AppTheme.FONT_SMALL);
-        metas.addActionListener(e -> showTypeGoalsDialog());
-
-        JPanel head = new JPanel(new BorderLayout());
-        head.setOpaque(false);
-        head.add(title, BorderLayout.WEST);
-        head.add(metas, BorderLayout.EAST);
-        balanceCard.add(head, BorderLayout.NORTH);
-
-        balanceBody = new JPanel();
-        balanceBody.setLayout(new BoxLayout(balanceBody, BoxLayout.Y_AXIS));
-        balanceBody.setOpaque(false);
-        balanceCard.add(balanceBody, BorderLayout.CENTER);
-        return balanceCard;
-    }
-
-    private void refreshBalanceCard() {
-        if (balanceBody == null) return;
-        balanceBody.removeAll();
-        LocalDate today = LocalDate.now();
-        LocalDate ws = weekStart(today);
-
-        int[] mins = new int[TYPE_KEYS.length];
-        for (int i = 0; i < TYPE_KEYS.length; i++) mins[i] = minutesByTypeInRange(TYPE_KEYS[i], ws, today);
-        int ref = 1;
-        for (int i = 0; i < TYPE_KEYS.length; i++)
-            ref = Math.max(ref, Math.max(mins[i], typeGoalWeek.getOrDefault(TYPE_KEYS[i], 0)));
-
-        boolean any = false;
-        for (int i = 0; i < TYPE_KEYS.length; i++) {
-            int goalW = typeGoalWeek.getOrDefault(TYPE_KEYS[i], 0);
-            if (mins[i] == 0 && goalW == 0) continue;   // tipo sem uso e sem meta: não mostra
-            any = true;
-            balanceBody.add(balanceRow(TYPE_KEYS[i], mins[i], goalW, ref));
-            balanceBody.add(Box.createVerticalStrut(5));
-        }
-        if (!any) {
-            JLabel l = new JLabel("Registre tempo em Estudo, Físico ou Lazer para ver o equilíbrio.");
-            l.setFont(AppTheme.FONT_SMALL); l.setForeground(AppTheme.TEXT_MUT);
-            l.setAlignmentX(Component.LEFT_ALIGNMENT);
-            balanceBody.add(l);
-        }
-        balanceBody.revalidate();
-        balanceBody.repaint();
-    }
-
-    private JPanel balanceRow(String type, int mins, int goalW, int ref) {
-        JPanel row = new JPanel(new BorderLayout(8, 0));
-        row.setOpaque(false);
-        row.setAlignmentX(Component.LEFT_ALIGNMENT);
-        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 22));
-
-        JLabel name = new JLabel(typeLabel(type));
-        name.setFont(AppTheme.FONT_SMALL);
-        name.setForeground(AppTheme.TEXT_SEC);
-        name.setPreferredSize(new Dimension(96, 16));
-
-        final Color col = typeColor(type);
-        final int mn = mins, rf = Math.max(1, ref), gw = goalW;
-        JPanel bar = new JPanel() {
-            @Override protected void paintComponent(Graphics g) {
-                Graphics2D g2 = (Graphics2D) g.create();
-                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                g2.setColor(AppTheme.SURFACE2);
-                g2.fillRoundRect(0, 5, getWidth(), getHeight() - 10, 6, 6);
-                int w = (int) (getWidth() * Math.min(1.0, mn / (double) rf));
-                g2.setColor(col);
-                g2.fillRoundRect(0, 5, Math.max(mn > 0 ? 3 : 0, w), getHeight() - 10, 6, 6);
-                if (gw > 0) {   // marca da meta
-                    int mx = (int) (getWidth() * Math.min(1.0, gw / (double) rf));
-                    g2.setColor(AppTheme.TEXT_SEC);
-                    g2.fillRect(Math.min(getWidth() - 2, mx), 2, 2, getHeight() - 4);
-                }
-                g2.dispose();
-            }
-            @Override public Dimension getPreferredSize() { return new Dimension(10, 18); }
-        };
-        bar.setOpaque(false);
-
-        String txt = goalW > 0 ? fmtHM(mins) + " / " + fmtHM(goalW) : fmtHM(mins);
-        JLabel val = new JLabel(txt, SwingConstants.RIGHT);
-        val.setFont(AppTheme.FONT_SMALL);
-        val.setForeground(goalW > 0 && mins >= goalW ? AppTheme.SUCCESS
-                : goalW > 0 && mins == 0 ? AppTheme.WARNING : AppTheme.TEXT_SEC);
-        val.setPreferredSize(new Dimension(90, 16));
-
-        row.add(name, BorderLayout.WEST);
-        row.add(bar,  BorderLayout.CENTER);
-        row.add(val,  BorderLayout.EAST);
-        return row;
-    }
-
     private void showTypeGoalsDialog() {
         JPanel panel = new JPanel(new GridBagLayout());
         GridBagConstraints c = new GridBagConstraints();
@@ -1143,110 +961,6 @@ public class StudyTracker extends JFrame {
         Timer tt = new Timer(600, e -> toast("Sua semana está sem " + String.join(" e ", faltando)
                 + ". Que tal um pouco hoje?"));
         tt.setRepeats(false); tt.start();
-    }
-
-    private JComponent buildGoalsCard() {
-        goalsCard = new RoundedPanel(18, AppTheme.SURFACE);
-        goalsCard.setLayout(new BorderLayout(0, 8));
-        goalsCard.setBorder(new EmptyBorder(14, 16, 14, 16));
-
-        JLabel title = new JLabel("Metas");
-        title.setFont(AppTheme.FONT_SECTION);
-        title.setForeground(AppTheme.TEXT_PRI);
-
-        StyledButton manage = new StyledButton("Gerenciar…", StyledButton.Variant.TEXT);
-        manage.setFont(AppTheme.FONT_SMALL);
-        manage.addActionListener(e -> showManageGoalsDialog());
-
-        JPanel head = new JPanel(new BorderLayout());
-        head.setOpaque(false);
-        head.add(title,  BorderLayout.WEST);
-        head.add(manage, BorderLayout.EAST);
-        goalsCard.add(head, BorderLayout.NORTH);
-
-        goalsBody = new JPanel();
-        goalsBody.setLayout(new BoxLayout(goalsBody, BoxLayout.Y_AXIS));
-        goalsBody.setOpaque(false);
-        goalsCard.add(goalsBody, BorderLayout.CENTER);
-
-        return goalsCard;
-    }
-
-    /** Metas agrupadas por tipo de área (Estudo / Físico / Lazer / …), com os sub-focos de cada área. */
-    private void refreshGoalsCard() {
-        if (goalsBody == null) return;
-        goalsBody.removeAll();
-
-        // Agrupa as áreas ativas por tipo, preservando a ordem do usuário dentro de cada grupo.
-        Map<String, java.util.List<String>> porTipo = new LinkedHashMap<>();
-        for (String t : TYPE_KEYS) porTipo.put(t, new ArrayList<>());
-        for (String s : studyDataMap.keySet()) {
-            if (archived.contains(s)) continue;
-            porTipo.computeIfAbsent(typeOf(s), k -> new ArrayList<>()).add(s);
-        }
-
-        boolean primeiro = true;
-        for (Map.Entry<String, java.util.List<String>> grupo : porTipo.entrySet()) {
-            if (grupo.getValue().isEmpty()) continue;
-            String tipo = grupo.getKey();
-
-            if (!primeiro) goalsBody.add(Box.createVerticalStrut(8));
-            primeiro = false;
-
-            JPanel cab = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
-            cab.setOpaque(false);
-            cab.setAlignmentX(Component.LEFT_ALIGNMENT);
-            cab.setMaximumSize(new Dimension(Integer.MAX_VALUE, 18));
-            cab.setBorder(new EmptyBorder(0, 0, 2, 0));
-            cab.add(colorDot(typeColor(tipo)));
-            JLabel cabL = new JLabel(typeLabel(tipo).toUpperCase());
-            cabL.setFont(AppTheme.FONT_CAPTION);
-            cabL.setForeground(AppTheme.TEXT_MUT);
-            cab.add(cabL);
-            goalsBody.add(cab);
-
-            for (String s : grupo.getValue()) {
-                int d = goals.getOrDefault(s, 0);
-                int w = weeklyGoalFor(s);
-                int m = monthlyGoalFor(s);
-
-                JPanel row = new JPanel(new BorderLayout(8, 0));
-                row.setOpaque(false);
-                row.setAlignmentX(Component.LEFT_ALIGNMENT);
-                row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 20));
-
-                JPanel dotName = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
-                dotName.setOpaque(false);
-                dotName.add(colorDot(studyDataMap.get(s).getColor()));
-                JLabel nm = new JLabel(s);
-                nm.setFont(AppTheme.FONT_LABEL);
-                nm.setForeground(AppTheme.TEXT_PRI);
-                dotName.add(nm);
-
-                JLabel val = new JLabel(d <= 0 && w <= 0 && m <= 0
-                        ? "sem meta"
-                        : "Dia " + fmtHM(Math.max(0, d)) + "  ·  Sem " + fmtHM(w) + "  ·  Mês " + fmtHM(m));
-                val.setFont(AppTheme.FONT_SMALL);
-                val.setForeground(d <= 0 && w <= 0 && m <= 0 ? AppTheme.TEXT_MUT : AppTheme.TEXT_SEC);
-                val.setHorizontalAlignment(SwingConstants.RIGHT);
-
-                row.add(dotName, BorderLayout.WEST);
-                row.add(val,     BorderLayout.EAST);
-                goalsBody.add(row);
-
-                java.util.List<String> sf = subFocos.get(s);
-                if (sf != null && !sf.isEmpty()) {
-                    JLabel sub = new JLabel("      " + String.join(" · ", sf));
-                    sub.setFont(AppTheme.FONT_CAPTION);
-                    sub.setForeground(AppTheme.TEXT_MUT);
-                    sub.setAlignmentX(Component.LEFT_ALIGNMENT);
-                    goalsBody.add(sub);
-                }
-                goalsBody.add(Box.createVerticalStrut(4));
-            }
-        }
-        goalsBody.revalidate();
-        goalsBody.repaint();
     }
 
     /** Diálogo para limpar as metas de várias matérias de uma vez. */
@@ -1530,246 +1244,6 @@ public class StudyTracker extends JFrame {
         todayTimer.start();
     }
 
-    private JComponent buildProgressCard() {
-        progressCard = new RoundedPanel(18, AppTheme.SURFACE);
-        progressCard.setLayout(new BorderLayout(0, 8));
-        progressCard.setBorder(new EmptyBorder(14, 16, 14, 16));
-
-        JLabel title = new JLabel("Progresso");
-        title.setFont(AppTheme.FONT_SECTION);
-        title.setForeground(AppTheme.TEXT_PRI);
-        progressCard.add(title, BorderLayout.NORTH);
-
-        progressBody = new JPanel();
-        progressBody.setLayout(new BoxLayout(progressBody, BoxLayout.Y_AXIS));
-        progressBody.setOpaque(false);
-        progressCard.add(progressBody, BorderLayout.CENTER);
-
-        return progressCard;
-    }
-
-    /** Repopula o cartão: bloco GERAL + bloco da matéria selecionada. */
-    private void refreshProgressCard() {
-        if (progressBody == null) return;
-        progressBody.removeAll();
-        LocalDate today = LocalDate.now();
-
-        // Bloco GERAL (metas = soma automática das matérias)
-        progressBody.add(sectionHeader("GERAL", null));
-        progressBody.add(streakInfoLine(null));
-        progressBody.add(Box.createVerticalStrut(4));
-        addPeriodRows(null, today);
-
-        // Divisor
-        progressBody.add(Box.createVerticalStrut(8));
-        JSeparator sep = new JSeparator();
-        sep.setMaximumSize(new Dimension(Integer.MAX_VALUE, 1));
-        sep.setForeground(AppTheme.DIVIDER);
-        progressBody.add(sep);
-        progressBody.add(Box.createVerticalStrut(8));
-
-        // Bloco da matéria selecionada
-        String subject = (String) subjectComboBox.getSelectedItem();
-        if (subject != null) {
-            Color dot = studyDataMap.getOrDefault(subject, new StudyData(0, AppTheme.TEXT_SEC)).getColor();
-            progressBody.add(sectionHeader(subject, dot));
-            progressBody.add(streakInfoLine(subject));
-            if (examDate.get(subject) != null) {
-                progressBody.add(Box.createVerticalStrut(2));
-                progressBody.add(examLine(subject, today));
-            }
-            progressBody.add(Box.createVerticalStrut(4));
-            addPeriodRows(subject, today);
-        }
-
-        progressBody.revalidate();
-        progressBody.repaint();
-    }
-
-    private void addPeriodRows(String subject, LocalDate today) {
-        Color base = subject == null
-                ? AppTheme.ACCENT
-                : studyDataMap.getOrDefault(subject, new StudyData(0, AppTheme.ACCENT)).getColor();
-        progressBody.add(periodRow("Dia",    minutesOnDay(subject, today),                         dailyGoalFor(subject),   base));
-        progressBody.add(Box.createVerticalStrut(4));
-        progressBody.add(periodRow("Semana", minutesInRange(subject, weekStart(today),  today),    weeklyGoalFor(subject),  base));
-        progressBody.add(Box.createVerticalStrut(4));
-        progressBody.add(periodRow("Mês",    minutesInRange(subject, monthStart(today), today),    monthlyGoalFor(subject), base));
-        progressBody.add(Box.createVerticalStrut(4));
-        progressBody.add(insightLine(subject, today));
-    }
-
-    /** Saldo da semana (min): estudado − meta_diária × dias agendados já decorridos. */
-    private int weeklyBalance(String subject, LocalDate today) { return stats.weeklyBalance(subject, today); }
-
-    /** Linha de insights: saldo da semana + comparação com o mês passado. */
-    private JPanel insightLine(String subject, LocalDate today) {
-        JPanel p = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
-        p.setOpaque(false);
-        p.setAlignmentX(Component.LEFT_ALIGNMENT);
-        p.setMaximumSize(new Dimension(Integer.MAX_VALUE, 18));
-
-        StringBuilder sb = new StringBuilder();
-        if (dailyGoalFor(subject) > 0) {
-            int bal = weeklyBalance(subject, today);
-            sb.append(bal >= 0 ? "semana: +" + fmtHM(bal) + " sobre a meta"
-                               : "semana: faltam " + fmtHM(-bal) + " p/ a meta");
-        }
-        int thisM = minutesInRange(subject, monthStart(today), today);
-        LocalDate lmEnd = today.minusMonths(1);
-        int lastM = minutesInRange(subject, lmEnd.withDayOfMonth(1), lmEnd);
-        if (thisM > 0 || lastM > 0) {
-            if (sb.length() > 0) sb.append("   ·   ");
-            int d = thisM - lastM;
-            sb.append("mês: ").append(fmtHM(thisM)).append(
-                    d == 0 ? " (= mês passado)"
-                  : d  > 0 ? " (▲ " + fmtHM(d)  + " vs. mês passado)"
-                           : " (▼ " + fmtHM(-d) + " vs. mês passado)");
-        }
-
-        JLabel l = new JLabel(sb.length() == 0 ? " " : sb.toString());
-        l.setFont(AppTheme.FONT_SMALL);
-        l.setForeground(AppTheme.TEXT_SEC);
-        p.add(l);
-        return p;
-    }
-
-    /** Linha de contagem regressiva de prova (só quando há data marcada). */
-    private JPanel examLine(String subject, LocalDate today) {
-        JPanel p = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
-        p.setOpaque(false);
-        p.setAlignmentX(Component.LEFT_ALIGNMENT);
-        p.setMaximumSize(new Dimension(Integer.MAX_VALUE, 18));
-
-        LocalDate exam = examDate.get(subject);
-        JLabel l = new JLabel();
-        l.setFont(AppTheme.FONT_SMALL);
-        if (exam == null) { l.setText(" "); p.add(l); return p; }
-
-        long dias = java.time.temporal.ChronoUnit.DAYS.between(today, exam);
-        String quando = exam.format(java.time.format.DateTimeFormatter.ofPattern("dd/MM"));
-        if (dias < 0) {
-            l.setText("Prova de " + subject + " foi em " + quando);
-            l.setForeground(AppTheme.TEXT_SEC);
-        } else {
-            int daily = dailyGoalFor(subject);
-            int agendadosRestantes = 0;
-            for (LocalDate d = today.plusDays(1); !d.isAfter(exam); d = d.plusDays(1))
-                if (isGoalDay(subject, d)) agendadosRestantes++;
-            String base = "Prova em " + (dias == 0 ? "HOJE" : dias + (dias == 1 ? " dia" : " dias"))
-                        + " (" + quando + ")";
-            if (daily > 0 && dias > 0)
-                base += "  ·  no ritmo da meta: ~" + fmtHM(daily * agendadosRestantes) + " até lá";
-            int total = 0, feitos = 0;
-            for (ChecklistItem it : checklist)
-                if (it.subject.equals(subject)) { total++; if (it.done) feitos++; }
-            if (total > 0)
-                base += "  ·  plano " + feitos + "/" + total + (feitos == total ? " · tudo feito" : "");
-            l.setText(base);
-            l.setForeground(dias <= 3 ? AppTheme.WARNING : AppTheme.ACCENT);
-        }
-        p.add(l);
-        return p;
-    }
-
-    /** Cabeçalho de bloco: ponto colorido opcional + nome em negrito. */
-    private JPanel sectionHeader(String name, Color dotColor) {
-        JPanel p = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
-        p.setOpaque(false);
-        p.setAlignmentX(Component.LEFT_ALIGNMENT);
-        p.setMaximumSize(new Dimension(Integer.MAX_VALUE, 22));
-        if (dotColor != null) p.add(colorDot(dotColor));
-        JLabel l = new JLabel(name);
-        l.setFont(AppTheme.FONT_BOLD);
-        l.setForeground(AppTheme.TEXT_PRI);
-        p.add(l);
-        return p;
-    }
-
-    /** Linha de sequência: 🔥 N dias · recorde M (ou dica quando não há streak). */
-    private JPanel streakInfoLine(String subject) {
-        JPanel p = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
-        p.setOpaque(false);
-        p.setAlignmentX(Component.LEFT_ALIGNMENT);
-        p.setMaximumSize(new Dimension(Integer.MAX_VALUE, 18));
-
-        int goal   = dailyGoalFor(subject);
-        int streak = currentStreak(subject);
-        int best   = bestStreak(subject);
-
-        JLabel l = new JLabel();
-        l.setFont(AppTheme.FONT_SMALL);
-        if (goal <= 0) {
-            l.setText("defina uma meta diária para ativar a sequência");
-            l.setForeground(AppTheme.TEXT_SEC);
-        } else if (streak <= 0) {
-            l.setText("comece hoje para iniciar a sequência");
-            l.setForeground(AppTheme.TEXT_SEC);
-        } else {
-            boolean metToday = minutesOnDay(subject, LocalDate.now()) >= goal;
-            String txt = "Sequência: " + streak + (streak == 1 ? " dia" : " dias") + streakBadge(streak)
-                       + "   ·   recorde " + best;
-            if (!metToday) txt += "   (estude hoje para manter)";
-            l.setText(txt);
-            l.setForeground(metToday ? AppTheme.WARNING : AppTheme.TEXT_SEC);
-        }
-        p.add(l);
-        return p;
-    }
-
-    /** Uma barra de período: rótulo · barra · "atual / meta  pct%". A barra usa
-     *  a cor da meta em níveis (tom escuro → claro) para mostrar o quanto falta. */
-    private JPanel periodRow(String label, int current, int goal, Color base) {
-        JPanel row = new JPanel(new BorderLayout(8, 0));
-        row.setOpaque(false);
-        row.setAlignmentX(Component.LEFT_ALIGNMENT);
-        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 22));
-
-        JLabel lbl = new JLabel(label);
-        lbl.setFont(AppTheme.FONT_SMALL);
-        lbl.setForeground(AppTheme.TEXT_SEC);
-        lbl.setPreferredSize(new Dimension(56, 18));
-
-        GaugeBar bar = new GaugeBar();
-        bar.setPreferredSize(new Dimension(0, 8));
-
-        JLabel val = new JLabel();
-        val.setFont(AppTheme.FONT_SMALL);
-        val.setHorizontalAlignment(SwingConstants.RIGHT);
-        val.setPreferredSize(new Dimension(120, 18));
-
-        if (goal <= 0) {
-            bar.set(0, AppTheme.TEXT_MUT, false);
-            val.setText("— sem meta");
-            val.setForeground(AppTheme.TEXT_SEC);
-        } else {
-            double frac = current / (double) goal;
-            boolean met = current >= goal;
-            int pct = (int) Math.min(100, frac * 100.0);
-            bar.set(frac, base, met);
-            val.setText(fmtHM(current) + " / " + fmtHM(goal) + "   " + (met ? "feito · " : "") + pct + "%");
-            val.setForeground(met ? AppTheme.SUCCESS : AppTheme.TEXT_PRI);
-        }
-
-        row.add(lbl, BorderLayout.WEST);
-        row.add(bar, BorderLayout.CENTER);
-        row.add(val, BorderLayout.EAST);
-        return row;
-    }
-
-    private JComponent colorDot(Color c) {
-        JPanel dot = new JPanel() {
-            @Override protected void paintComponent(Graphics g) {
-                Graphics2D g2 = (Graphics2D) g.create();
-                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                g2.setColor(c); g2.fillOval(0, 4, 10, 10); g2.dispose();
-            }
-            @Override public Dimension getPreferredSize() { return new Dimension(10, 18); }
-        };
-        dot.setOpaque(false);
-        return dot;
-    }
-
     private static String fmtHM(int minutes) { return ScreenKit.fmtHM(minutes); }
 
     /** Quantos dias por semana a meta diária vale (7 se não houver restrição). */
@@ -1777,38 +1251,9 @@ public class StudyTracker extends JFrame {
 
     private String typeOf(String area) { return areaType.getOrDefault(area, "estudo"); }
 
-    private static int typeIndex(String key) {
-        for (int i = 0; i < TYPE_KEYS.length; i++) if (TYPE_KEYS[i].equals(key)) return i;
-        return 0;
-    }
-    private static String typeLabel(String key) { return TYPE_LABELS[typeIndex(key)]; }
-    private static Color typeColor(String key) {
-        switch (key) {
-            case "fisico":   return new Color(0x66BB6A);
-            case "lazer":    return new Color(0xAB47BC);
-            case "trabalho": return new Color(0xFFA726);
-            case "outro":    return new Color(0x8FA0B8);
-            default:         return AppTheme.ACCENT;   // estudo
-        }
-    }
-
-    /** Monta o donut: um grupo por área (tipo) com suas matérias como sub-áreas. */
-    private java.util.List<PieChartPanel.Group> buildPieGroups() {
-        java.util.List<PieChartPanel.Group> out = new ArrayList<>();
-        for (String type : TYPE_KEYS) {
-            java.util.List<PieChartPanel.Slice> slices = new ArrayList<>();
-            int sum = 0;
-            for (Map.Entry<String, StudyData> e : studyDataMap.entrySet()) {
-                if (!typeOf(e.getKey()).equals(type)) continue;
-                int min = e.getValue().getMinutes();
-                if (min <= 0) continue;
-                slices.add(new PieChartPanel.Slice(e.getKey(), e.getValue().getColor(), min));
-                sum += min;
-            }
-            if (sum > 0) out.add(new PieChartPanel.Group(typeLabel(type), typeColor(type), sum, slices));
-        }
-        return out;
-    }
+    private static int typeIndex(String key)      { return AreaTypes.index(key); }
+    private static String typeLabel(String key)   { return AreaTypes.label(key); }
+    private static Color typeColor(String key)    { return AreaTypes.color(key); }
 
     /** Minutos estudados por tipo numa janela de datas [start, end]. */
     private int minutesByTypeInRange(String type, LocalDate start, LocalDate end) {
@@ -3302,74 +2747,16 @@ public class StudyTracker extends JFrame {
         int th = total / 60, tm = total % 60;
         tvTotal.setText(String.format("Total: %dh %02dmin", th, tm));
 
-        // Resumo lateral
-        summaryPanel.removeAll();
-        for (Map.Entry<String, StudyData> e : studyDataMap.entrySet()) {
-            summaryPanel.add(buildSummaryRow(e.getKey(), e.getValue()));
-            summaryPanel.add(Box.createVerticalStrut(6));
-        }
-        summaryPanel.add(Box.createVerticalStrut(4));
-        JSeparator sep = new JSeparator();
-        sep.setMaximumSize(new Dimension(Integer.MAX_VALUE, 1));
-        sep.setForeground(AppTheme.DIVIDER);
-        summaryPanel.add(sep);
-        summaryPanel.add(Box.createVerticalStrut(6));
-        summaryPanel.add(buildSummaryRow("TOTAL", new StudyData(total, AppTheme.TEXT_PRI)));
-        summaryPanel.revalidate(); summaryPanel.repaint();
-
-        chartPanel.setGroups(buildPieGroups());
-        if (calendarPanel != null) {
-            Map<String, Color> colorMap = new LinkedHashMap<>();
-            studyDataMap.forEach((k, v) -> colorMap.put(k, v.getColor()));
-            calendarPanel.updateColors(colorMap);
-        }
         updateGoalProgress();
         refreshStreaks();
         if (weekScreen != null) weekScreen.setAreas(activeAreas(), areaColors());
         if (areasScreen != null) areasScreen.refresh();
         refreshTodayCard();
         refreshNowCard();
-        refreshBalanceCard();
-        refreshGoalsCard();
-        refreshProgressCard();
+        if (progressScreen != null) progressScreen.refresh();   // donut, calendário, Progresso, Metas, Equilíbrio
         updatePomodoroCount();
         balanceNudge();
         saveData();
-    }
-
-    private JPanel buildSummaryRow(String name, StudyData sd) {
-        JPanel row = new JPanel(new BorderLayout(8, 0));
-        row.setOpaque(false);
-        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 22));
-
-        JPanel dotName = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
-        dotName.setOpaque(false);
-
-        JPanel dot = new JPanel() {
-            final Color c = sd.getColor();
-            @Override protected void paintComponent(Graphics g) {
-                Graphics2D g2 = (Graphics2D) g.create();
-                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                g2.setColor(c); g2.fillOval(0, 4, 10, 10); g2.dispose();
-            }
-            @Override public Dimension getPreferredSize() { return new Dimension(10, 18); }
-        };
-        dot.setOpaque(false);
-
-        JLabel lblName = new JLabel(name);
-        lblName.setFont(name.equals("TOTAL") ? AppTheme.FONT_BOLD : AppTheme.FONT_LABEL);
-        lblName.setForeground(AppTheme.TEXT_PRI);
-
-        dotName.add(dot); dotName.add(lblName);
-
-        int h = sd.getMinutes() / 60, m = sd.getMinutes() % 60;
-        JLabel lblTime = new JLabel(String.format("%dh %02dmin", h, m));
-        lblTime.setFont(name.equals("TOTAL") ? AppTheme.FONT_BOLD : AppTheme.FONT_SMALL);
-        lblTime.setForeground(name.equals("TOTAL") ? AppTheme.ACCENT : AppTheme.TEXT_SEC);
-
-        row.add(dotName, BorderLayout.WEST);
-        row.add(lblTime, BorderLayout.EAST);
-        return row;
     }
 
     private void refreshCombo() {
