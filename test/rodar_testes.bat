@@ -27,4 +27,5 @@ java -Djava.awt.headless=true -cp "%OUT%" NoticesTest || set FALHOU=1
 java -Djava.awt.headless=true -cp "%OUT%" GoalDialogsTest || set FALHOU=1
 java -Djava.awt.headless=true -cp "%OUT%" AreaDialogsTest || set FALHOU=1
 java -Djava.awt.headless=true -cp "%OUT%" SettingsDialogsTest || set FALHOU=1
+java -Djava.awt.headless=true -cp "%OUT%" SessionRecorderTest || set FALHOU=1
 exit /b %FALHOU%

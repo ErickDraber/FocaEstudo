@@ -48,7 +48,6 @@ public class StudyTracker extends JFrame {
 
     // --- Detalhes da sessão: perguntados AO TERMINAR, não antes (menos decisões para começar) ---
     private String pendingSubFoco;   // sub-foco já escolhido (ex.: rodízio do "Agora"); vem marcado no "Como foi?"
-    private static final String[] ENERGY_TEXT = {"", "Baixa", "Ok", "Alta"};
     private static final String[] KIND_LABELS = {"–", "Teoria", "Exercícios", "Revisão", "Outro"};
     private static final String[] KIND_KEYS   = {"", "teoria", "exercicios", "revisao", "outro"};
 
@@ -140,6 +139,20 @@ public class StudyTracker extends JFrame {
         public void setAutoCycle(boolean on) { if (timerCard != null) timerCard.setAutoCycle(on); }
         public void toast(String msg)       { StudyTracker.this.toast(msg); }
     }, SettingsDialogs.swingPrompt(this));
+
+    // "Como foi?" ao terminar uma sessão (sub-foco, energia, nota). Mesmo cfg e sub-focos.
+    private final SessionDetailsDialog sessionDetails = new SessionDetailsDialog(cfg, subFocos);
+
+    // Registrar tempo (total da área + sessão em ordem + aviso de meta). Mesmas coleções.
+    private final SessionRecorder recorder = new SessionRecorder(studyDataMap, sessions, goals, stats,
+            java.time.Clock.systemDefaultZone(), new SessionRecorder.Host() {
+        public void recorded() {
+            pendingSubFoco = null;
+            updateUI();
+            saveData(); saveSessions();
+        }
+        public void toast(String msg) { StudyTracker.this.toast(msg); }
+    });
 
     // --- Estado de persistência ---
     private boolean ready  = false;  // true quando a UI terminou de carregar
@@ -793,8 +806,8 @@ public class StudyTracker extends JFrame {
             boolean didFocus = pomo.isFocus() && subject != null;
             if (didFocus) {
                 // Ciclo automático não para pra perguntar: o próximo bloco começa sozinho.
-                SessionDetails d;
-                if (cfg.pomoAutoCycle) d = SessionDetails.of(pendingSubFoco);
+                SessionDetailsDialog.Details d;
+                if (cfg.pomoAutoCycle) d = SessionDetailsDialog.Details.of(pendingSubFoco);
                 else { exitFocusMode(); d = askSessionDetails(subject, pomo.plannedMinutes(), "Foco concluído"); }
                 addTime(subject, pomo.plannedMinutes(), "pomodoro", d);
                 pomo.completeFocus();
@@ -871,164 +884,19 @@ public class StudyTracker extends JFrame {
 
     // ── DATA (tempo + sessão) ────────────────────────────────────────────────
 
-    /** Sub-foco, energia (0 = não informada, 1..3) e nota de uma sessão. Tudo opcional. */
-    private static final class SessionDetails {
-        final String kind, note;
-        final int energy;
-        SessionDetails(String kind, String note, int energy) {
-            this.kind = kind == null ? "" : kind;
-            this.note = note == null ? "" : note;
-            this.energy = energy;
-        }
-        static SessionDetails of(String kind) { return new SessionDetails(kind, "", 0); }
+    /** "Como foi?" (ver SessionDetailsDialog). No modo foco, aparece junto da faixa. */
+    private SessionDetailsDialog.Details askSessionDetails(String subject, int minutes, String titulo) {
+        return sessionDetails.ask(dialogOwner(), subject, minutes, titulo, pendingSubFoco);
     }
 
-    /**
-     * "Como foi?" ao terminar: sub-foco e energia em botões de 1 clique, nota opcional.
-     * Enter salva; fechar a janela também salva (o tempo nunca se perde por causa do diálogo).
-     */
-    private SessionDetails askSessionDetails(String subject, int minutes, String titulo) {
-        if (!cfg.askDetails) return SessionDetails.of(pendingSubFoco);
-
-        JPanel panel = new JPanel(new GridBagLayout());
-        GridBagConstraints c = new GridBagConstraints();
-        c.gridx = 0; c.anchor = GridBagConstraints.WEST; c.fill = GridBagConstraints.HORIZONTAL;
-        c.weightx = 1; c.insets = new Insets(2, 2, 2, 2);
-        int row = 0;
-
-        c.gridy = row++;
-        panel.add(dlgLabel(fmtHM(minutes) + " de " + subject + ". Como foi?", true), c);
-
-        java.util.List<String> sfs = subFocos.getOrDefault(subject, java.util.Collections.emptyList());
-        ChoiceRow sfRow = null;
-        if (!sfs.isEmpty()) {
-            c.gridy = row++; c.insets = new Insets(10, 2, 2, 2);
-            panel.add(dlgHint("No que você focou?"), c);
-            sfRow = new ChoiceRow(sfs.toArray(new String[0]), sfs.indexOf(pendingSubFoco));
-            c.gridy = row++; c.insets = new Insets(2, 2, 2, 2);
-            panel.add(sfRow, c);
-        }
-
-        c.gridy = row++; c.insets = new Insets(10, 2, 2, 2);
-        panel.add(dlgHint("Energia"), c);
-        ChoiceRow enRow = new ChoiceRow(new String[]{ENERGY_TEXT[1], ENERGY_TEXT[2], ENERGY_TEXT[3]}, -1);
-        c.gridy = row++; c.insets = new Insets(2, 2, 2, 2);
-        panel.add(enRow, c);
-
-        c.gridy = row++; c.insets = new Insets(10, 2, 2, 2);
-        panel.add(dlgHint("Nota (vai para o Histórico)"), c);
-        JTextField note = new JTextField(28);
-        note.setFont(AppTheme.FONT_LABEL);
-        c.gridy = row++; c.insets = new Insets(2, 2, 2, 2);
-        panel.add(note, c);
-
-        JOptionPane op = new JOptionPane(panel, JOptionPane.PLAIN_MESSAGE, JOptionPane.DEFAULT_OPTION,
-                null, new Object[]{"Salvar"}, "Salvar");
-        JDialog dlg = op.createDialog(dialogOwner(), titulo);
-        dlg.addWindowFocusListener(new WindowAdapter() {   // já dá para digitar a nota; Enter salva
-            @Override public void windowGainedFocus(WindowEvent e) { note.requestFocusInWindow(); }
-        });
-        note.addActionListener(e -> op.setValue("Salvar"));
-        dlg.setVisible(true);
-        dlg.dispose();
-
-        String kind = sfRow != null && sfRow.selected() >= 0 ? sfs.get(sfRow.selected()) : null;
-        String txt = AppTheme.semHtml(note.getText().replace('|', '/').trim());   // | separa campos da sessão
-        return new SessionDetails(kind, txt, enRow.selected() + 1);
+    /** Registra o tempo hoje (ver SessionRecorder). */
+    private void addTime(String subject, int minutes, String type, SessionDetailsDialog.Details d) {
+        recorder.add(subject, minutes, type, d);
     }
 
-    /** Linha de botões em que no máximo um fica marcado; clicar no marcado desmarca. */
-    private static final class ChoiceRow extends JPanel {
-        private final java.util.List<JToggleButton> btns = new ArrayList<>();
-        ChoiceRow(String[] labels, int initial) {
-            super(new FlowLayout(FlowLayout.LEFT, 6, 0));
-            for (int i = 0; i < labels.length; i++) {
-                // Pintado à mão: no Nimbus o botão marcado quase não se distingue do desmarcado.
-                JToggleButton b = new JToggleButton(labels[i], i == initial) {
-                    @Override protected void paintComponent(Graphics g) {
-                        Graphics2D g2 = (Graphics2D) g.create();
-                        g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                        g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
-                        int w = getWidth(), h = getHeight();
-                        if (isSelected()) {
-                            g2.setColor(AppTheme.ACCENT);
-                            g2.fillRoundRect(0, 0, w - 1, h - 1, 14, 14);
-                        } else {
-                            g2.setColor(getModel().isRollover() ? AppTheme.SURFACE2 : AppTheme.SURFACE);
-                            g2.fillRoundRect(0, 0, w - 1, h - 1, 14, 14);
-                            g2.setColor(AppTheme.DIVIDER);
-                            g2.drawRoundRect(0, 0, w - 1, h - 1, 14, 14);
-                        }
-                        g2.setFont(isSelected() ? AppTheme.FONT_BOLD : AppTheme.FONT_LABEL);
-                        g2.setColor(isSelected() ? Color.WHITE : AppTheme.TEXT_PRI);
-                        FontMetrics fm = g2.getFontMetrics();
-                        g2.drawString(getText(), (w - fm.stringWidth(getText())) / 2,
-                                (h - fm.getHeight()) / 2 + fm.getAscent());
-                        g2.dispose();
-                    }
-                };
-                b.setFont(AppTheme.FONT_BOLD);   // mede pelo negrito: o texto não muda de tamanho ao marcar
-                b.setContentAreaFilled(false);
-                b.setBorderPainted(false);
-                b.setBorder(BorderFactory.createEmptyBorder(6, 14, 6, 14));
-                b.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-                b.setFocusPainted(false);
-                b.addActionListener(e -> { if (b.isSelected()) for (JToggleButton o : btns) if (o != b) o.setSelected(false); });
-                btns.add(b);
-                add(b);
-            }
-        }
-        int selected() {
-            for (int i = 0; i < btns.size(); i++) if (btns.get(i).isSelected()) return i;
-            return -1;
-        }
-    }
-
-    private void addTime(String subject, int minutes, String type, SessionDetails d) {
-        addTime(subject, minutes, type, d, LocalDate.now());
-    }
-
-    /**
-     * Registra tempo num dia. Dia passado (registro esquecido) vira uma sessão às 12:00 daquele dia;
-     * metas, sequência e calendário são derivados das sessões, então já contam no dia certo.
-     */
-    private void addTime(String subject, int minutes, String type, SessionDetails d, LocalDate day) {
-        LocalDate today = LocalDate.now();
-        boolean isToday = !day.isBefore(today);
-        int beforeToday = minutesOnDay(subject, today);
-        long ts = isToday ? System.currentTimeMillis()
-                : day.atTime(12, 0).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
-
-        studyDataMap.get(subject).addMinutes(minutes);
-        StudySession s = new StudySession(subject, minutes, ts, type, d.note, d.kind, d.energy);
-        // mantém a lista em ordem cronológica, como ela é carregada do disco
-        int pos = sessions.size();
-        while (pos > 0 && sessions.get(pos - 1).getTimestamp() > ts) pos--;
-        sessions.add(pos, s);
-        pendingSubFoco = null;
-        updateUI();
-        saveData(); saveSessions();
-
-        if (isToday) goalNudge(subject, beforeToday, beforeToday + minutes);
-    }
-
-    /** Toast de incentivo: meta do dia batida agora, ou reta final. */
-    private void goalNudge(String subject, int before, int after) {
-        int goal = goals.getOrDefault(subject, 0);
-        if (goal <= 0) return;
-        final String msg;
-        int alvo = dailyMinFor(subject);   // celebra ao bater o MÍNIMO
-        if (before < alvo && after >= alvo) {
-            msg = "Você bateu a meta de " + subject + " hoje!  (" + fmtHM(after) + ")";
-        } else if (!isHardDay(LocalDate.now()) && after < alvo && alvo - after <= 15) {
-            msg = "Faltam " + (alvo - after) + " min para a meta de " + subject + " hoje.";
-        } else {
-            return;
-        }
-        // atrasa um pouco para não colidir com o toast de "tempo salvo"
-        Timer t = new Timer(2500, e -> toast(msg));
-        t.setRepeats(false);
-        t.start();
+    /** Registra o tempo num dia (passado vira sessão às 12:00; ver SessionRecorder). */
+    private void addTime(String subject, int minutes, String type, SessionDetailsDialog.Details d, LocalDate day) {
+        recorder.add(subject, minutes, type, d, day);
     }
 
     // ── PROGRESSÃO: cálculo por dia/semana/mês (derivado das sessões) ─────────
@@ -1048,7 +916,6 @@ public class StudyTracker extends JFrame {
 
     private boolean isGoalDay(String subject, LocalDate date) { return stats.isGoalDay(subject, date); }
     private int dailyGoalFor(String subject)                  { return stats.dailyGoalFor(subject); }
-    private int dailyMinFor(String subject)                   { return stats.dailyMinFor(subject); }
     private boolean isHardDay(LocalDate d)                    { return stats.isHardDay(d); }
     private int currentStreak(String subject)                 { return stats.currentStreak(subject); }
     private static int streakMilestone(int streak)            { return StudyStats.streakMilestone(streak); }
