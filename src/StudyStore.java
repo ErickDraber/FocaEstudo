@@ -8,8 +8,8 @@ import java.util.*;
  * .properties (dados, sessões, tarefas), backup (.bak + gravação atômica), exportar/importar
  * e a migração da pasta do programa (versões ≤ 1.0.2).
  *
- * NÃO sabe o que cada chave significa — isso (e as travas ready/loadOk) continua no
- * StudyTracker, que converte os campos dele de/para Properties.
+ * NÃO sabe o que cada chave significa: isso é do {@link StudyDataFile} (study_data) e as
+ * travas ready/loadOk continuam no StudyTracker.
  *
  * Recebe a pasta dos dados no construtor: os testes usam uma pasta temporária.
  */
