@@ -30,8 +30,7 @@ public class StudyTracker extends JFrame {
     private JPanel        goalBar;
     private GaugeBar      goalProgress;
     private JLabel        tvGoalLabel, tvGoalPercent;
-    private RoundedPanel  nowCard;
-    private JPanel        nowBody;
+    private NowCard       nowCard;
     private CustomTabs    bottomTabs;
 
     // --- Cronômetro: estado em StopwatchModel; o Timer do Swing só dá o tique de 1 s ---
@@ -660,162 +659,43 @@ public class StudyTracker extends JFrame {
 
     // ── CARTÃO DE PROGRESSO ──────────────────────────────────────────────────
 
-    /** Cartão "Agora": a protagonista da tela. Uma sugestão só, grande, com 1 clique para começar. */
-    private JLabel nowReason;
+    /** Cartão "Agora" (ver NowCard; o que sugerir fica no NowSuggester). */
     private final java.util.Set<String> skippedNow = new java.util.HashSet<>();   // "Outra coisa" neste turno
 
     private JComponent buildNowCard() {
-        nowCard = new RoundedPanel(18, AppTheme.SURFACE);
-        nowCard.setBorderColor(AppTheme.ACCENT, 2f);
-        nowCard.setLayout(new BorderLayout(0, 6));
-        nowCard.setBorder(new EmptyBorder(14, 18, 12, 18));
-        nowReason = new JLabel("Agora");
-        nowReason.setFont(AppTheme.FONT_SMALL);
-        nowReason.setForeground(AppTheme.ACCENT);
-        nowCard.add(nowReason, BorderLayout.NORTH);
-        nowBody = new JPanel(new BorderLayout(14, 0));
-        nowBody.setOpaque(false);
-        nowCard.add(nowBody, BorderLayout.CENTER);
+        NowSuggester suggester = new NowSuggester(new NowSuggester.Source() {
+            public Map<String, StudyData> areas()              { return studyDataMap; }
+            public Set<String> archived()                      { return archived; }
+            public StudyStats stats()                          { return stats; }
+            public String typeOf(String area)                  { return StudyTracker.this.typeOf(area); }
+            public int idealDaily(String area)                 { return goals.getOrDefault(area, 0); }
+            public LocalDate examDate(String area)             { return examDate.get(area); }
+            public List<String> subFocos(String area)          { return subFocos.get(area); }
+            public List<StudySession> sessions()               { return sessions; }
+            public int typeGoalWeek(String type)               { return typeGoalWeek.getOrDefault(type, 0); }
+            public int minutesByType(String t, LocalDate a, LocalDate b) { return minutesByTypeInRange(t, a, b); }
+            public List<String> plannedAreas(int dow, int slot) { return StudyTracker.this.plannedAreas(dow, slot); }
+        });
+        nowCard = new NowCard(new NowCard.Source() {
+            public boolean sessionInProgress()     { return StudyTracker.this.sessionInProgress(); }
+            public boolean pomodoroBreak()         { return pomodoroActive() && !pomo.isFocus(); }
+            public String selectedArea()           { return (String) subjectComboBox.getSelectedItem(); }
+            public Map<String, StudyData> areas()  { return studyDataMap; }
+            public boolean isHardDay(LocalDate d)  { return StudyTracker.this.isHardDay(d); }
+        }, suggester, skippedNow, new NowCard.Actions() {
+            public void focusMode()                       { enterFocusMode(true); }
+            public void start(String area, String sf)     { startArea(area, sf); }
+            public void hardDay(LocalDate day) {
+                hardDays.add(day.toString());
+                updateUI();
+                toast("Ok, hoje não cobra. Descansa.");
+            }
+            public void undoHardDay(LocalDate day) { hardDays.remove(day.toString()); updateUI(); }
+        });
         return nowCard;
     }
 
-    private void refreshNowCard() {
-        if (nowBody == null) return;
-        nowBody.removeAll();
-        LocalDate hoje = LocalDate.now();
-
-        // Sessão contando: o "agora" é ela, não uma sugestão nova.
-        if (sessionInProgress()) {
-            boolean pausaPomo = pomodoroActive() && !pomo.isFocus();
-            String area = (String) subjectComboBox.getSelectedItem();
-            StudyData sd = area == null ? null : studyDataMap.get(area);
-            nowReason.setText(pausaPomo ? "Agora · pausa do Pomodoro" : "Agora · em andamento");
-            JLabel nm = new JLabel(pausaPomo ? "Pausa" : area,
-                    bigDot(sd != null && !pausaPomo ? sd.getColor() : AppTheme.ACCENT), SwingConstants.LEFT);
-            nm.setIconTextGap(10);
-            nm.setFont(AppTheme.FONT_TITLE);
-            nm.setForeground(AppTheme.TEXT_PRI);
-            StyledButton foco = new StyledButton("Modo foco", StyledButton.Variant.FILLED);
-            foco.setFont(AppTheme.FONT_BOLD);
-            foco.setBorder(BorderFactory.createEmptyBorder(8, 22, 8, 22));
-            foco.setToolTipText("Recolhe a janela numa faixa pequena com o tempo");
-            foco.addActionListener(e -> enterFocusMode(true));
-            JPanel goWrap = new JPanel(new GridBagLayout());
-            goWrap.setOpaque(false);
-            goWrap.add(foco);
-            nowBody.add(nm,     BorderLayout.CENTER);
-            nowBody.add(goWrap, BorderLayout.EAST);
-            nowBody.revalidate(); nowBody.repaint();
-            return;
-        }
-
-        if (isHardDay(hoje)) {
-            nowReason.setText("Agora · dia difícil");
-            JLabel l = new JLabel("Sem cobrança hoje. Se der vontade, qualquer minuto conta.");
-            l.setFont(AppTheme.FONT_LABEL); l.setForeground(AppTheme.TEXT_SEC);
-            nowBody.add(l, BorderLayout.CENTER);
-            nowBody.add(nowLinks(textBtn("desfazer", () -> { hardDays.remove(hoje.toString()); updateUI(); })),
-                    BorderLayout.SOUTH);
-            nowBody.revalidate(); nowBody.repaint();
-            return;
-        }
-
-        String[] sug = nextSuggestion();
-        if (sug == null && !skippedNow.isEmpty()) { skippedNow.clear(); sug = nextSuggestion(); }   // deu a volta
-        StyledButton hard = textBtn("hoje tá difícil?", () -> {
-            hardDays.add(hoje.toString());
-            updateUI();
-            toast("Ok, hoje não cobra. Descansa.");
-        });
-
-        if (sug == null) {
-            nowReason.setText("Agora");
-            JLabel l = new JLabel("Tudo em dia por aqui. Aproveite o descanso.");
-            l.setFont(AppTheme.FONT_LABEL); l.setForeground(AppTheme.TEXT_SEC);
-            nowBody.add(l, BorderLayout.CENTER);
-            nowBody.add(nowLinks(hard), BorderLayout.SOUTH);
-        } else {
-            final String area = sug[0];
-            final String sf = sug.length > 2 ? sug[2] : null;
-            nowReason.setText("Agora · " + sug[1]);
-
-            StudyData sd = studyDataMap.get(area);
-            JLabel nm = new JLabel(sf != null ? area + " · " + sf : area,
-                    bigDot(sd != null ? sd.getColor() : AppTheme.ACCENT), SwingConstants.LEFT);
-            nm.setIconTextGap(10);
-            nm.setFont(AppTheme.FONT_TITLE);
-            nm.setForeground(AppTheme.TEXT_PRI);
-            nm.setAlignmentX(Component.LEFT_ALIGNMENT);
-
-            JPanel txt = new JPanel();
-            txt.setLayout(new BoxLayout(txt, BoxLayout.Y_AXIS));
-            txt.setOpaque(false);
-            txt.add(nm);
-            // O motivo já fala da meta? Então não repete o progresso embaixo.
-            String prog = sug[1].contains("meta") ? null : nowProgressText(area, hoje);
-            if (prog != null) {
-                JLabel p = new JLabel(prog);
-                p.setFont(AppTheme.FONT_SMALL); p.setForeground(AppTheme.TEXT_SEC);
-                p.setBorder(new EmptyBorder(2, 24, 0, 0));
-                p.setAlignmentX(Component.LEFT_ALIGNMENT);
-                txt.add(p);
-            }
-
-            StyledButton go = new StyledButton("Começar", StyledButton.Variant.FILLED);
-            go.setFont(AppTheme.FONT_BOLD);
-            go.setBorder(BorderFactory.createEmptyBorder(8, 26, 8, 26));
-            go.addActionListener(e -> startArea(area, sf));
-            JPanel goWrap = new JPanel(new GridBagLayout());   // centralizado na altura, sem esticar
-            goWrap.setOpaque(false);
-            goWrap.add(go);
-
-            StyledButton outra = textBtn("Outra coisa", () -> { skippedNow.add(area); refreshNowCard(); });
-            outra.setToolTipText("Mostrar outra sugestão");
-            nowBody.add(txt,    BorderLayout.CENTER);
-            nowBody.add(goWrap, BorderLayout.EAST);
-            nowBody.add(nowLinks(outra, hard), BorderLayout.SOUTH);
-        }
-        nowBody.revalidate();
-        nowBody.repaint();
-    }
-
-    /** "40 de 90 min hoje" (ou "mínimo de hoje feito"); null se a área não tem meta hoje. */
-    private String nowProgressText(String area, LocalDate hoje) {
-        int ideal = goals.getOrDefault(area, 0);
-        if (ideal <= 0 || !isGoalDay(area, hoje)) return null;
-        int feito = minutesOnDay(area, hoje);
-        if (feito <= 0) return "meta de hoje: " + fmtHM(ideal);
-        if (feito >= dailyMinFor(area)) return "mínimo de hoje feito · " + fmtHM(feito) + " de " + fmtHM(ideal);
-        return fmtHM(feito) + " de " + fmtHM(ideal) + " hoje";
-    }
-
-    private JPanel nowLinks(JComponent... links) {
-        JPanel p = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
-        p.setOpaque(false);
-        p.setBorder(new EmptyBorder(4, 14, 0, 0));
-        for (JComponent l : links) p.add(l);
-        return p;
-    }
-
-    private static StyledButton textBtn(String text, Runnable r) {
-        StyledButton b = new StyledButton(text, StyledButton.Variant.TEXT);
-        b.setFont(AppTheme.FONT_SMALL);
-        b.setBorder(BorderFactory.createEmptyBorder(4, 10, 4, 10));
-        b.addActionListener(e -> r.run());
-        return b;
-    }
-
-    private static Icon bigDot(Color c) {
-        return new Icon() {
-            public int getIconWidth()  { return 14; }
-            public int getIconHeight() { return 14; }
-            public void paintIcon(Component comp, Graphics g, int x, int y) {
-                Graphics2D g2 = (Graphics2D) g.create();
-                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                g2.setColor(c); g2.fillOval(x, y, 14, 14); g2.dispose();
-            }
-        };
-    }
+    private void refreshNowCard() { if (nowCard != null) nowCard.refresh(); }
 
     /** Seleciona a área (e o sub-foco), vai para a aba Cronômetro e liga o cronômetro: 1 clique. */
     private void startArea(String area, String subFoco) {
@@ -830,83 +710,6 @@ public class StudyTracker extends JFrame {
         showScreen(SCR_HOJE);                           // o cronômetro fica na tela Hoje
         if (bottomTabs != null) bottomTabs.select(0);   // aba Cronômetro
         startStopwatch();
-    }
-
-    /** {área, motivo} da coisa mais relevante pra fazer agora, ou null. Pula o que foi descartado com "Outra coisa". */
-    private String[] nextSuggestion() {
-        LocalDate today = LocalDate.now();
-        // 0. o que a pessoa já planejou para este turno: a decisão já foi tomada, é só seguir
-        int turno = PlannerPanel.slotAt(LocalTime.now());
-        for (String a : plannedAreas(today.getDayOfWeek().getValue(), turno))
-            if (!isDoneToday(a) && !skippedNow.contains(a)) return new String[]{a, "está no seu plano " + PlannerPanel.SLOT_PHRASE[turno]};
-
-        // 1. meta diária de hoje não batida (prioriza prova mais próxima e o que falta)
-        String best = null; long bestScore = Long.MIN_VALUE; String reason = null;
-        for (String s : studyDataMap.keySet()) {
-            if (archived.contains(s) || skippedNow.contains(s)) continue;
-            int goal = goals.getOrDefault(s, 0);
-            if (goal <= 0 || !isGoalDay(s, today)) continue;
-            int done = minutesOnDay(s, today);
-            if (done >= goal) continue;
-            long score = goal - done;
-            LocalDate exam = examDate.get(s);
-            String extra = "";
-            if (exam != null) {
-                long d = java.time.temporal.ChronoUnit.DAYS.between(today, exam);
-                if (d >= 0) { score += (120 - Math.min(110, d)) * 3L; extra = " · prova em " + d + "d"; }
-            }
-            if (score > bestScore) {
-                bestScore = score; best = s;
-                reason = "faltam " + fmtHM(goal - done) + " pra meta de hoje" + extra;
-            }
-        }
-        if (best != null) return new String[]{best, reason};
-
-        // 1b. rodízio: área de Físico com grupo (sub-foco) parado há mais tempo
-        String rArea = null, rSf = null; long oldestSf = Long.MAX_VALUE;
-        for (String s : studyDataMap.keySet()) {
-            if (archived.contains(s) || skippedNow.contains(s) || !"fisico".equals(typeOf(s))) continue;
-            for (String grupo : subFocos.getOrDefault(s, java.util.Collections.emptyList())) {
-                long last = 0;
-                for (StudySession se : sessions)
-                    if (se.getSubject().equals(s) && grupo.equalsIgnoreCase(se.getKind()))
-                        last = Math.max(last, se.getTimestamp());
-                if (last < oldestSf) { oldestSf = last; rArea = s; rSf = grupo; }
-            }
-        }
-        if (rArea != null) {
-            long dias = oldestSf == 0 ? -1
-                    : java.time.temporal.ChronoUnit.DAYS.between(dateOf(oldestSf), today);
-            if (oldestSf == 0 || dias >= 3)
-                return new String[]{rArea,
-                        oldestSf == 0 ? "treinar " + rSf + " — ainda não treinou" : "treinar " + rSf + " — faz " + dias + " dias",
-                        rSf};
-        }
-
-        // 2. tipo com meta de equilíbrio zerada na semana
-        LocalDate ws = weekStart(today);
-        for (String t : TYPE_KEYS) {
-            if (typeGoalWeek.getOrDefault(t, 0) <= 0) continue;
-            if (minutesByTypeInRange(t, ws, today) > 0) continue;
-            for (String s : studyDataMap.keySet())
-                if (!archived.contains(s) && !skippedNow.contains(s) && typeOf(s).equals(t))
-                    return new String[]{s, "sua semana está sem " + typeLabel(t).toLowerCase()};
-        }
-
-        // 3. área sem atividade há mais tempo
-        String stale = null; long oldest = Long.MAX_VALUE;
-        for (String s : studyDataMap.keySet()) {
-            if (archived.contains(s) || skippedNow.contains(s)) continue;
-            long last = 0;
-            for (StudySession se : sessions) if (se.getSubject().equals(s)) last = Math.max(last, se.getTimestamp());
-            if (last < oldest) { oldest = last; stale = s; }
-        }
-        if (stale != null) {
-            long dias = oldest == 0 ? -1 : java.time.temporal.ChronoUnit.DAYS.between(dateOf(oldest), today);
-            return new String[]{stale, dias < 0 ? "ainda sem nenhuma sessão registrada"
-                    : dias == 0 ? "já mexeu nisso hoje" : "faz " + dias + " dia(s) sem isso"};
-        }
-        return null;
     }
 
     private void showTypeGoalsDialog() {
