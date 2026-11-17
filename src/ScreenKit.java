@@ -4,9 +4,9 @@ import javax.swing.border.EmptyBorder;
 import java.awt.*;
 
 /**
- * Peças comuns às telas (Hoje, Progresso, Áreas…): cabeçalho, corpo rolável, botão pequeno
- * e o formato de minutos. Saíram do StudyTracker para que uma tela possa morar na sua
- * própria classe sem depender dele.
+ * Peças comuns às telas (Hoje, Progresso, Áreas…): cabeçalho, corpo rolável, botão pequeno,
+ * o formato de minutos e os rótulos/linhas dos diálogos. Saíram do StudyTracker para que uma
+ * tela (ou um diálogo) possa morar na sua própria classe sem depender dele.
  */
 final class ScreenKit {
 
@@ -69,5 +69,29 @@ final class ScreenKit {
     static String fmtHM(int minutes) {
         int h = minutes / 60, m = minutes % 60;
         return h > 0 ? String.format("%dh%02d", h, m) : m + "m";
+    }
+
+    // Rótulos para dentro de JOptionPane (L&F do sistema, fundo claro): NÃO forçar
+    // as cores do AppTheme aqui — o tema escuro deixava o texto branco e invisível.
+    static JLabel dlgLabel(String text, boolean bold) {
+        JLabel l = new JLabel(text);
+        l.setFont(bold ? AppTheme.FONT_BOLD : AppTheme.FONT_LABEL);
+        return l;
+    }
+
+    static JLabel dlgHint(String text) {
+        JLabel l = new JLabel(text);
+        l.setFont(AppTheme.FONT_SMALL);
+        l.setForeground(Color.GRAY);
+        return l;
+    }
+
+    /** Uma linha "rótulo : campo" num formulário de diálogo (GridBagLayout). */
+    static void addFormRow(JPanel panel, GridBagConstraints c, int row, String label, JComponent field) {
+        c.gridx = 0; c.gridy = row; c.weightx = 0; c.fill = GridBagConstraints.NONE;
+        panel.add(dlgLabel(label, false), c);
+        c.gridx = 1; c.gridy = row; c.weightx = 1; c.fill = GridBagConstraints.HORIZONTAL;
+        panel.add(field, c);
+        c.weightx = 0; c.fill = GridBagConstraints.NONE;
     }
 }

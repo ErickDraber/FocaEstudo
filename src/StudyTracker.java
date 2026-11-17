@@ -116,6 +116,15 @@ public class StudyTracker extends JFrame {
         }
     });
 
+    // Diálogos de metas (por área, gerenciar, equilíbrio) e o aviso de equilíbrio. Mesmas coleções.
+    private final GoalDialogs goalDialogs = new GoalDialogs(this, studyDataMap, archived, goals, goalsMin,
+            goalsWeek, goalsMonth, goalDays, examDate, typeGoalWeek, cfg, stats, new GoalDialogs.Host() {
+        public void changed()                { updateUI(); }
+        public void toast(String msg)        { StudyTracker.this.toast(msg); }
+        public String typeOf(String area)    { return StudyTracker.this.typeOf(area); }
+        public int minutesByType(String type, LocalDate a, LocalDate b) { return minutesByTypeInRange(type, a, b); }
+    });
+
     // --- Estado de persistência ---
     private boolean ready  = false;  // true quando a UI terminou de carregar
     private boolean loadOk = true;   // false se a leitura do save falhou (bloqueia gravação)
@@ -269,7 +278,7 @@ public class StudyTracker extends JFrame {
             public int idealDaily(String area)     { return goals.getOrDefault(area, 0); }
             public WeekPlan plan()                 { return planRules; }
         }, new TodayPanels.Actions() {
-            public void manageGoals()        { showManageGoalsDialog(); }
+            public void manageGoals()        { goalDialogs.manageGoals(); }
             public void openPlanner()        { StudyTracker.this.openPlanner(); }
             public void fillPlan()           { fillPlanFromGoals(); }
             public void start(String area)   { startArea(area, null); }
@@ -369,8 +378,8 @@ public class StudyTracker extends JFrame {
         }, new ProgressScreen.Actions() {
             public void history()     { showHistory(); }
             public void stats()       { new StatsPanel(StudyTracker.this, sessions, studyDataMap).setVisible(true); }
-            public void manageGoals() { showManageGoalsDialog(); }
-            public void typeGoals()   { showTypeGoalsDialog(); }
+            public void manageGoals() { goalDialogs.manageGoals(); }
+            public void typeGoals()   { goalDialogs.typeGoals(); }
         });
         return progressScreen;
     }
@@ -452,121 +461,6 @@ public class StudyTracker extends JFrame {
         showScreen(SCR_HOJE);                           // o cronômetro fica na tela Hoje
         if (timerCard != null) timerCard.selectTab(0);   // aba Cronômetro
         startStopwatch();
-    }
-
-    private void showTypeGoalsDialog() {
-        JPanel panel = new JPanel(new GridBagLayout());
-        GridBagConstraints c = new GridBagConstraints();
-        c.insets = new Insets(4, 4, 4, 4); c.anchor = GridBagConstraints.WEST;
-        c.gridx = 0; c.gridy = 0; c.gridwidth = 2;
-        panel.add(dlgHint("Mínimo por semana para cada tipo (vazio = sem meta de equilíbrio)."), c);
-        c.gridwidth = 1;
-
-        JTextField[] fs = new JTextField[TYPE_KEYS.length];
-        for (int i = 0; i < TYPE_KEYS.length; i++) {
-            int v = typeGoalWeek.getOrDefault(TYPE_KEYS[i], 0);
-            fs[i] = new JTextField(v > 0 ? String.valueOf(v) : "", 6);
-            fs[i].setFont(AppTheme.FONT_LABEL);
-            addFormRow(panel, c, i + 1, TYPE_LABELS[i] + ":", fs[i]);
-        }
-
-        int r = JOptionPane.showConfirmDialog(this, panel, "Metas de equilíbrio (semana)",
-                JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
-        if (r != JOptionPane.OK_OPTION) return;
-        try {
-            for (int i = 0; i < TYPE_KEYS.length; i++) {
-                int v = GoalForm.parseDuration(fs[i].getText());
-                if (v > 0) typeGoalWeek.put(TYPE_KEYS[i], v); else typeGoalWeek.remove(TYPE_KEYS[i]);
-            }
-        } catch (IllegalArgumentException ex) {
-            toast("Valor inválido — use \"90\" ou \"1h30\"."); return;
-        }
-        updateUI();
-        toast("Metas de equilíbrio atualizadas.");
-    }
-
-    /** Aviso gentil (1x por semana) se algum tipo com meta está zerado a partir de quinta. */
-    private void balanceNudge() {
-        if (!ready) return;
-        LocalDate today = LocalDate.now();
-        if (isHardDay(today)) return;
-        if (today.getDayOfWeek().getValue() < 4) return;   // só de quinta em diante
-        java.time.temporal.WeekFields wf = java.time.temporal.WeekFields.ISO;
-        String semana = today.get(wf.weekBasedYear()) + "-W" + today.get(wf.weekOfWeekBasedYear());
-        if (semana.equals(cfg.balanceNudgeWeek)) return;
-
-        LocalDate ws = weekStart(today);
-        List<String> faltando = new ArrayList<>();
-        for (String t : TYPE_KEYS) {
-            if (typeGoalWeek.getOrDefault(t, 0) <= 0) continue;
-            if (minutesByTypeInRange(t, ws, today) == 0) faltando.add(typeLabel(t).toLowerCase());
-        }
-        if (faltando.isEmpty()) return;
-        cfg.balanceNudgeWeek = semana;   // persistido no saveData() do updateUI
-        Timer tt = new Timer(600, e -> toast("Sua semana está sem " + String.join(" e ", faltando)
-                + ". Que tal um pouco hoje?"));
-        tt.setRepeats(false); tt.start();
-    }
-
-    /** Diálogo para limpar as metas de várias matérias de uma vez. */
-    private void showManageGoalsDialog() {
-        List<String> ativas = new ArrayList<>();
-        for (String s : studyDataMap.keySet()) if (!archived.contains(s)) ativas.add(s);
-
-        JPanel panel = new JPanel(new GridBagLayout());
-        GridBagConstraints c = new GridBagConstraints();
-        c.gridx = 0; c.anchor = GridBagConstraints.WEST; c.fill = GridBagConstraints.HORIZONTAL;
-        c.weightx = 1; c.insets = new Insets(2, 2, 2, 2);
-        int row = 0;
-
-        c.gridy = row++; panel.add(dlgLabel("Marque as matérias para limpar as metas:", true), c);
-
-        // Agrupa por tipo de área, na ordem Estudo → Físico → Lazer → Trabalho → Outro.
-        Map<String, java.util.List<String>> porTipo = new LinkedHashMap<>();
-        for (String t : TYPE_KEYS) porTipo.put(t, new ArrayList<>());
-        for (String s : ativas) porTipo.computeIfAbsent(typeOf(s), k -> new ArrayList<>()).add(s);
-
-        Map<String, JCheckBox> cbs = new LinkedHashMap<>();
-        for (Map.Entry<String, java.util.List<String>> grupo : porTipo.entrySet()) {
-            if (grupo.getValue().isEmpty()) continue;
-            JLabel cab = new JLabel(typeLabel(grupo.getKey()).toUpperCase());
-            cab.setFont(AppTheme.FONT_CAPTION);
-            cab.setForeground(AppTheme.TEXT_MUT);
-            c.gridy = row++; c.insets = new Insets(8, 2, 2, 2); panel.add(cab, c);
-            c.insets = new Insets(2, 2, 2, 2);
-            for (String s : grupo.getValue()) {
-                int d = goals.getOrDefault(s, 0), w = weeklyGoalFor(s), mo = monthlyGoalFor(s);
-                boolean temMeta = d > 0 || w > 0 || mo > 0;
-                JCheckBox cb = new JCheckBox("   " + s + "   —   " + (temMeta
-                        ? "Dia " + fmtHM(Math.max(0, d)) + " · Sem " + fmtHM(w) + " · Mês " + fmtHM(mo)
-                        : "sem meta"));
-                cb.setEnabled(temMeta);
-                cbs.put(s, cb);
-                c.gridy = row++; panel.add(cb, c);
-            }
-        }
-
-        JButton todas = new JButton("Marcar todas com meta");
-        todas.setFont(AppTheme.FONT_SMALL);
-        todas.setFocusPainted(false);
-        todas.addActionListener(e -> cbs.values().forEach(cb -> { if (cb.isEnabled()) cb.setSelected(true); }));
-        c.gridy = row++; c.fill = GridBagConstraints.NONE; c.insets = new Insets(8, 2, 2, 2);
-        panel.add(todas, c);
-
-        int r = JOptionPane.showConfirmDialog(this, panel, "Gerenciar metas",
-                JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
-        if (r != JOptionPane.OK_OPTION) return;
-
-        int n = 0;
-        for (Map.Entry<String, JCheckBox> e : cbs.entrySet()) {
-            if (!e.getValue().isSelected()) continue;
-            String s = e.getKey();
-            goals.remove(s); goalsMin.remove(s); goalsWeek.remove(s); goalsMonth.remove(s);
-            n++;
-        }
-        if (n == 0) { toast("Nenhuma matéria marcada."); return; }
-        updateUI();
-        toast(n == 1 ? "Metas de 1 matéria limpas." : "Metas de " + n + " matérias limpas.");
     }
 
     // ── Semana planejada + cartão "Hoje" ─────────────────────────────────────
@@ -659,8 +553,6 @@ public class StudyTracker extends JFrame {
 
     private int goalDaysPerWeek(String subject)                     { return stats.goalDaysPerWeek(subject); }
     private int scheduledDaysInMonth(String subject, LocalDate ref) { return stats.scheduledDaysInMonth(subject, ref); }
-    private int weeklyGoalFor(String subject)                       { return stats.weeklyGoalFor(subject); }
-    private int monthlyGoalFor(String subject)                      { return stats.monthlyGoalFor(subject); }
 
     /** "🍅 N hoje" — conta sessões do tipo pomodoro registradas hoje. */
     private void updatePomodoroCount() {
@@ -1136,7 +1028,6 @@ public class StudyTracker extends JFrame {
     // Estes repasses mantêm as chamadas antigas do StudyTracker funcionando sem mudança.
     private int minutesOnDay(String subject, LocalDate day)                   { return stats.minutesOnDay(subject, day); }
     private int minutesInRange(String subject, LocalDate start, LocalDate end) { return stats.minutesInRange(subject, start, end); }
-    private static LocalDate weekStart(LocalDate date)  { return StudyStats.weekStart(date); }
     private static LocalDate monthStart(LocalDate date) { return StudyStats.monthStart(date); }
 
     // ── STREAKS (dias consecutivos batendo a meta diária) ────────────────────
@@ -1174,259 +1065,15 @@ public class StudyTracker extends JFrame {
 
     // ── METAS ───────────────────────────────────────────────────────────────
 
-    private void showGoalDialog() {
-        String subject = (String) subjectComboBox.getSelectedItem();
-        if (subject == null) { toast("Selecione uma matéria!"); return; }
+    /** Metas da área do combo (botão "Meta" e Ctrl+G). O diálogo fica no GoalDialogs. */
+    private void showGoalDialog() { goalDialogs.editGoals((String) subjectComboBox.getSelectedItem()); }
 
-        JTextField fDay   = goalField(goals.getOrDefault(subject, 0));
-        JTextField fMin   = goalField(goalsMin.getOrDefault(subject, 0));
-        JTextField fWeek  = goalField(goalsWeek.getOrDefault(subject, 0));
-        JTextField fMonth = goalField(goalsMonth.getOrDefault(subject, 0));
-
-        JPanel panel = new JPanel(new GridBagLayout());
-        GridBagConstraints c = new GridBagConstraints();
-        c.insets = new Insets(3, 3, 3, 3);
-        c.anchor = GridBagConstraints.WEST;
-
-        int row = 0;
-        addFormRow(panel, c, row++, "Meta diária (ideal):", fDay);
-        addFormRow(panel, c, row++, "Mínimo aceitável:",    fMin);
-        addFormRow(panel, c, row++, "Meta semanal:", fWeek);
-        addFormRow(panel, c, row++, "Meta mensal:",  fMonth);
-        c.gridx = 0; c.gridy = row++; c.gridwidth = 2; c.insets = new Insets(0, 3, 8, 3);
-        panel.add(dlgHint("Bater o mínimo já mantém a sequência. Vazio = mínimo igual ao ideal."), c);
-        c.gridwidth = 1; c.insets = new Insets(3, 3, 3, 3);
-
-        c.gridx = 0; c.gridy = row++; c.gridwidth = 2; c.weightx = 1;
-        c.fill = GridBagConstraints.HORIZONTAL; c.insets = new Insets(2, 3, 4, 3);
-        panel.add(dlgHint("Minutos (\"90\") ou horas (\"1h30\").  Semana/mês em branco = calculados pela meta diária × dias."), c);
-
-        JButton btnLimpar = new JButton("Limpar metas");
-        btnLimpar.setFont(AppTheme.FONT_SMALL);
-        btnLimpar.setMargin(new Insets(2, 8, 2, 8));
-        btnLimpar.setFocusPainted(false);
-        btnLimpar.setToolTipText("Zera meta diária, semanal e mensal desta matéria");
-        btnLimpar.addActionListener(e -> { fDay.setText(""); fMin.setText(""); fWeek.setText(""); fMonth.setText(""); });
-        JPanel limparRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
-        limparRow.add(btnLimpar);
-        c.gridy = row++; c.insets = new Insets(0, 3, 10, 3);
-        panel.add(limparRow, c);
-        c.gridwidth = 1; c.weightx = 0; c.fill = GridBagConstraints.NONE; c.insets = new Insets(3, 3, 3, 3);
-
-        // Dias da semana em que a meta vale (para sequência não quebrar no fim de semana).
-        java.util.Set<java.time.DayOfWeek> diasAtuais = goalDays.get(subject);
-        String[] nomes = {"Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"};
-        JToggleButton[] tgDias = new JToggleButton[7];
-        JPanel diasRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 3, 2));
-        for (int i = 0; i < 7; i++) {
-            java.time.DayOfWeek dw = java.time.DayOfWeek.of(i + 1);
-            boolean on = diasAtuais == null || diasAtuais.isEmpty() || diasAtuais.contains(dw);
-            tgDias[i] = new JToggleButton(nomes[i], on);
-            tgDias[i].setMargin(new Insets(2, 6, 2, 6));
-            tgDias[i].setFocusPainted(false);
-            diasRow.add(tgDias[i]);
-        }
-        java.util.function.Supplier<boolean[]> diasSel = () -> {
-            boolean[] b = new boolean[7];
-            for (int i = 0; i < 7; i++) b[i] = tgDias[i].isSelected();
-            return b;
-        };
-        java.util.function.IntSupplier nDiasSel = () -> GoalForm.daysCount(diasSel.get());
-
-        JLabel diasHint = dlgHint(nDiasSel.getAsInt() + " dia(s)/semana com meta");
-        // Ao MEXER nos dias, semana e mês passam a ser diária × nº de dias.
-        for (JToggleButton t : tgDias) t.addItemListener(e -> {
-            int nd = nDiasSel.getAsInt();
-            int d;
-            try { d = GoalForm.parseDuration(fDay.getText()); } catch (Exception ex) { d = 0; }
-            if (d > 0) {
-                int wk = GoalForm.weekFromDaily(d, nd), mo = GoalForm.monthFromWeek(wk);
-                fWeek.setText(String.valueOf(wk));
-                fMonth.setText(String.valueOf(mo));
-                diasHint.setText(nd + " dia(s)/semana  →  semana " + fmtHM(wk) + "  ·  mês " + fmtHM(mo));
-            } else {
-                diasHint.setText(nd + " dia(s)/semana. Preencha a meta diária p/ calcular semana e mês.");
-            }
-        });
-
-        c.gridx = 0; c.gridy = row++; c.gridwidth = 2;
-        panel.add(dlgLabel("Dias da meta diária", true), c);
-        c.gridy = row++;
-        panel.add(diasRow, c);
-        c.gridy = row++; c.insets = new Insets(0, 3, 4, 3);
-        panel.add(diasHint, c);
-        c.gridy = row++; c.insets = new Insets(0, 3, 10, 3);
-        panel.add(dlgHint("Dias desmarcados não exigem a meta e não quebram a sequência."), c);
-        c.insets = new Insets(3, 3, 3, 3);
-
-        // Data de prova (opcional).
-        LocalDate examAtual = examDate.get(subject);
-        JTextField fExam = new JTextField(GoalForm.examText(examAtual), 10);
-        fExam.setFont(AppTheme.FONT_LABEL);
-        addFormRow(panel, c, row++, "Data da prova:", fExam);
-        c.gridx = 0; c.gridy = row++; c.gridwidth = 2; c.insets = new Insets(0, 3, 12, 3);
-        panel.add(dlgHint("Formato dd/mm/aaaa. Deixe vazio para não usar."), c);
-        c.gridwidth = 1; c.insets = new Insets(3, 3, 3, 3);
-
-        c.gridx = 0; c.gridy = row++; c.gridwidth = 2;
-        panel.add(dlgLabel("Sugestões de meta diária", true), c);
-
-        JPanel presets = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 2));
-        for (int m : new int[]{15, 30, 45, 60, 90, 120}) {
-            final int mm = m;
-            JButton b = new JButton(fmtHM(mm));
-            b.setMargin(new Insets(2, 8, 2, 8));
-            b.setFocusPainted(false);
-            b.addActionListener(e -> fillGoalFields(mm, nDiasSel.getAsInt(), fDay, fWeek, fMonth));
-            presets.add(b);
-        }
-        c.gridx = 0; c.gridy = row++; c.gridwidth = 2;
-        panel.add(presets, c);
-
-        int avg30  = avgDailyMinutes(subject, 30);
-        int avgAct = avgActiveDayMinutes(subject, 30);
-        if (avg30 > 0) {
-            c.gridx = 0; c.gridy = row++; c.gridwidth = 2;
-            panel.add(suggestionRow("Sua média nos últimos 30 dias: " + fmtHM(avg30) + "/dia",
-                    Math.max(5, avg30), nDiasSel, fDay, fWeek, fMonth), c);
-        }
-        if (avgAct > 0 && avgAct != avg30) {
-            c.gridx = 0; c.gridy = row++; c.gridwidth = 2;
-            panel.add(suggestionRow("Média nos dias em que você estudou: " + fmtHM(avgAct),
-                    avgAct, nDiasSel, fDay, fWeek, fMonth), c);
-        }
-        if (avg30 == 0 && avgAct == 0) {
-            c.gridx = 0; c.gridy = row++; c.gridwidth = 2;
-            panel.add(dlgHint("Estude alguns dias e o app passa a sugerir metas pela sua média."), c);
-        }
-
-        int melhorSem = bestWeekMinutes(subject);
-        if (melhorSem > 0) {
-            int perDay = GoalForm.bestWeekPerDay(melhorSem, nDiasSel.getAsInt());
-            c.gridx = 0; c.gridy = row++; c.gridwidth = 2;
-            panel.add(suggestionRow("Repetir sua melhor semana (" + fmtHM(melhorSem) + ")  →  " + fmtHM(perDay) + "/dia",
-                    perDay, nDiasSel, fDay, fWeek, fMonth), c);
-        }
-
-        // Meta adaptativa (item 1): sobe se vem batendo folgado, baixa se vem falhando muito.
-        int adapt = adaptiveGoalSuggestion(subject);
-        if (adapt > 0) {
-            int atual = goals.getOrDefault(subject, 0);
-            c.gridx = 0; c.gridy = row++; c.gridwidth = 2;
-            panel.add(suggestionRow(
-                    (adapt > atual ? "Você vem batendo com folga — que tal subir para " + fmtHM(adapt) + "?"
-                                   : "Semanas puxadas — sugestão: baixar para " + fmtHM(adapt) + " e retomar o ritmo"),
-                    adapt, nDiasSel, fDay, fWeek, fMonth), c);
-        }
-
-        int r = JOptionPane.showConfirmDialog(this, panel,
-                "Metas de \"" + subject + "\"",
-                JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
-        if (r != JOptionPane.OK_OPTION) return;
-
-        int gDay, gWeek, gMonth;
-        try {
-            gDay   = GoalForm.parseDuration(fDay.getText());
-            gWeek  = GoalForm.parseDuration(fWeek.getText());
-            gMonth = GoalForm.parseDuration(fMonth.getText());
-        } catch (IllegalArgumentException ex) {
-            toast("Meta inválida — use algo como \"90\", \"1h30\" ou \"1:30\".");
-            return;
-        }
-
-        // Dias da meta
-        java.util.Set<java.time.DayOfWeek> dias = GoalForm.daysFrom(diasSel.get());   // null = todos os dias
-        if (dias == null) goalDays.remove(subject);
-        else              goalDays.put(subject, dias);
-
-        // Data da prova
-        try {
-            LocalDate prova = GoalForm.parseExamDate(fExam.getText());
-            if (prova == null) examDate.remove(subject); else examDate.put(subject, prova);
-        } catch (IllegalArgumentException ex) {
-            toast("Data da prova inválida (use dd/mm/aaaa) — ignorada.");
-            examDate.remove(subject);
-        }
-
-        int gMin;
-        try { gMin = GoalForm.parseDuration(fMin.getText()); } catch (IllegalArgumentException ex) { gMin = 0; }
-        goals.put(subject, gDay);
-        gMin = GoalForm.effectiveMin(gMin, gDay);
-        if (gMin > 0) goalsMin.put(subject, gMin); else goalsMin.remove(subject);
-        goalsWeek.put(subject, gWeek);
-        goalsMonth.put(subject, gMonth);
-        updateUI();
-        toast((gDay > 0 || gWeek > 0 || gMonth > 0)
-                ? "Metas de \"" + subject + "\" atualizadas."
-                : "Metas de \"" + subject + "\" removidas.");
-    }
-
-    /**
-     * Item 1 — meta adaptativa. Devolve uma meta diária sugerida (múltiplo de 5) ou 0.
-     * Sobe ~15% se, nos últimos 14 dias agendados, a média ficou ≥ 20% acima da meta e a
-     * sequência ≥ 7. Baixa ~20% se bateu a meta em menos de 40% desses dias.
-     */
-    private int adaptiveGoalSuggestion(String subject) { return stats.adaptiveGoalSuggestion(subject); }
-
-    /**
-     * Preenche os 3 campos a partir de uma meta diária, usando o nº de dias/semana
-     * selecionados: semana = diária × nDias; mês = semana × ~4,345.
-     */
-    private void fillGoalFields(int daily, int nDias, JTextField fDay, JTextField fWeek, JTextField fMonth) {
-        int week = GoalForm.weekFromDaily(daily, nDias);
-        fDay.setText(String.valueOf(daily));
-        fWeek.setText(String.valueOf(week));
-        fMonth.setText(String.valueOf(GoalForm.monthFromWeek(week)));
-    }
-
-    private JPanel suggestionRow(String text, int minutes, java.util.function.IntSupplier nDias,
-                                JTextField fDay, JTextField fWeek, JTextField fMonth) {
-        JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
-        row.add(dlgHint(text));
-        JButton use = new JButton("Usar");
-        use.setMargin(new Insets(1, 8, 1, 8));
-        use.setFont(AppTheme.FONT_SMALL);
-        use.setFocusPainted(false);
-        use.addActionListener(e -> fillGoalFields(minutes, nDias.getAsInt(), fDay, fWeek, fMonth));
-        row.add(use);
-        return row;
-    }
-
-    /** Uma linha "rótulo : campo" no formulário de metas (GridBagLayout). */
+    // Rótulos e linhas de formulário dos diálogos (ver ScreenKit; usados por vários diálogos aqui).
     private static void addFormRow(JPanel panel, GridBagConstraints c, int row, String label, JComponent field) {
-        c.gridx = 0; c.gridy = row; c.weightx = 0; c.fill = GridBagConstraints.NONE;
-        panel.add(dlgLabel(label, false), c);
-        c.gridx = 1; c.gridy = row; c.weightx = 1; c.fill = GridBagConstraints.HORIZONTAL;
-        panel.add(field, c);
-        c.weightx = 0; c.fill = GridBagConstraints.NONE;
+        ScreenKit.addFormRow(panel, c, row, label, field);
     }
-
-    /** Média diária de estudo (min/dia) nos últimos {@code days} dias corridos. */
-    private int avgDailyMinutes(String subject, int days)     { return stats.avgDailyMinutes(subject, days); }
-    private int avgActiveDayMinutes(String subject, int days) { return stats.avgActiveDayMinutes(subject, days); }
-    private int bestWeekMinutes(String subject)               { return stats.bestWeekMinutes(subject); }
-
-    /** Campo de texto para meta, pré-preenchido (vazio se 0). */
-    private JTextField goalField(int value) {
-        JTextField f = new JTextField(value > 0 ? String.valueOf(value) : "", 6);
-        f.setFont(AppTheme.FONT_LABEL);
-        return f;
-    }
-
-    // Rótulos para dentro de JOptionPane (L&F do sistema, fundo claro): NÃO forçar
-    // as cores do AppTheme aqui — o tema escuro deixava o texto branco e invisível.
-    private static JLabel dlgLabel(String text, boolean bold) {
-        JLabel l = new JLabel(text);
-        l.setFont(bold ? AppTheme.FONT_BOLD : AppTheme.FONT_LABEL);
-        return l;
-    }
-
-    private static JLabel dlgHint(String text) {
-        JLabel l = new JLabel(text);
-        l.setFont(AppTheme.FONT_SMALL);
-        l.setForeground(Color.GRAY);
-        return l;
-    }
+    private static JLabel dlgLabel(String text, boolean bold) { return ScreenKit.dlgLabel(text, bold); }
+    private static JLabel dlgHint(String text)                { return ScreenKit.dlgHint(text); }
 
     private void updateGoalProgress() {
         String subject = (String) subjectComboBox.getSelectedItem();
@@ -1821,7 +1468,7 @@ public class StudyTracker extends JFrame {
         refreshNowCard();
         if (progressScreen != null) progressScreen.refresh();   // donut, calendário, Progresso, Metas, Equilíbrio
         updatePomodoroCount();
-        balanceNudge();
+        if (ready) goalDialogs.balanceNudge();
         saveData();
     }
 
