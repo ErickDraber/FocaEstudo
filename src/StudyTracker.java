@@ -30,24 +30,9 @@ public class StudyTracker extends JFrame {
     private NowCard       nowCard;
     private TimerCard     timerCard;            // área + meta + abas Cronômetro / Manual / Pomodoro
 
-    // --- Cronômetro: estado em StopwatchModel; o Timer do Swing só dá o tique de 1 s ---
-    private final StopwatchModel sw = new StopwatchModel();
-    private Timer  stopwatch;
-
-    // --- Pomodoro: estado em PomodoroModel; o Timer do Swing só dá o tique de 1 s ---
-    private final PomodoroModel pomo = new PomodoroModel();
-    private Timer   countdownTimer;
-
-    // --- Inatividade ---
-    private Timer idleTimer;
-    private long  lastActivityMs = System.currentTimeMillis();
-    private boolean idleAsking = false;
-
     // --- Ajustes + marcadores "já mostrei" (persistidos em study_data como __chave__; ver AppSettings) ---
     private final AppSettings cfg = new AppSettings();
 
-    // --- Detalhes da sessão: perguntados AO TERMINAR, não antes (menos decisões para começar) ---
-    private String pendingSubFoco;   // sub-foco já escolhido (ex.: rodízio do "Agora"); vem marcado no "Como foi?"
     private static final String[] KIND_LABELS = {"–", "Teoria", "Exercícios", "Revisão", "Outro"};
     private static final String[] KIND_KEYS   = {"", "teoria", "exercicios", "revisao", "outro"};
 
@@ -102,7 +87,7 @@ public class StudyTracker extends JFrame {
         public void save()             { saveData(); }
         public void toast(String msg)  { StudyTracker.this.toast(msg); }
         public void trayClicked() {
-            if (focusBar != null) { exitFocusMode(); return; }
+            if (flow.focusBar != null) { flow.exitFocusMode(); return; }
             setVisible(true); setState(Frame.NORMAL); toFront();
         }
     });
@@ -147,11 +132,30 @@ public class StudyTracker extends JFrame {
     private final SessionRecorder recorder = new SessionRecorder(studyDataMap, sessions, goals, stats,
             java.time.Clock.systemDefaultZone(), new SessionRecorder.Host() {
         public void recorded() {
-            pendingSubFoco = null;
+            flow.pendingSubFoco = null;
             updateUI();
             saveData(); saveSessions();
         }
         public void toast(String msg) { StudyTracker.this.toast(msg); }
+    });
+
+    // O fluxo das sessões: cronômetro, Pomodoro, Manual, modo foco e inatividade (estado nos modelos).
+    private final SessionFlow flow = new SessionFlow(cfg, studyDataMap, goals, stats, recorder, sessionDetails,
+            new SessionFlow.Host() {
+        public String selectedArea() {
+            return subjectComboBox == null ? null : (String) subjectComboBox.getSelectedItem();
+        }
+        public void toast(String msg)                  { StudyTracker.this.toast(msg); }
+        public void refreshNowCard()                   { StudyTracker.this.refreshNowCard(); }
+        public void updatePomodoroCount()              { StudyTracker.this.updatePomodoroCount(); }
+        public void showInfo(String title, String msg) { showInfoDialog(title, msg); }
+        public Component window()                      { return StudyTracker.this; }
+        public void hideWindow()                       { setVisible(false); }
+        public void showWindow() {
+            setVisible(true);
+            setState(Frame.NORMAL);
+            toFront();
+        }
     });
 
     // --- Estado de persistência ---
@@ -178,9 +182,9 @@ public class StudyTracker extends JFrame {
         });
 
         buildUI();
-        setupTimers();
+        flow.setupTimers();
         setupShortcuts();
-        setupIdleWatch();
+        flow.setupIdleWatch();
     }
 
     // ── ATALHOS DE TECLADO ──────────────────────────────────────────────────
@@ -197,9 +201,9 @@ public class StudyTracker extends JFrame {
             if (e.getID() != KeyEvent.KEY_PRESSED || e.getKeyCode() != KeyEvent.VK_SPACE) return false;
             KeyboardFocusManager kfm = KeyboardFocusManager.getCurrentKeyboardFocusManager();
             Window fw = kfm.getFocusedWindow();
-            if (fw != this && (focusBar == null || fw != focusBar)) return false;   // diálogo aberto: ignora
+            if (fw != this && (flow.focusBar == null || fw != flow.focusBar)) return false;   // diálogo aberto: ignora
             if (kfm.getFocusOwner() instanceof javax.swing.text.JTextComponent) return false;
-            if (focusBar != null) focusTogglePause(); else toggleStopwatch();
+            if (flow.focusBar != null) flow.focusTogglePause(); else flow.toggleStopwatch();
             return true;   // consome o espaço
         });
     }
@@ -209,38 +213,6 @@ public class StudyTracker extends JFrame {
         rp.getActionMap().put(name, new AbstractAction() {
             @Override public void actionPerformed(ActionEvent e) { action.run(); }
         });
-    }
-
-    /** Espaço: inicia se parado, pausa se rodando, retoma se pausado com tempo. */
-    private void toggleStopwatch() {
-        if (sw.isRunning()) stopStopwatch();
-        else                                            startStopwatch();
-    }
-
-    // ── INATIVIDADE ─────────────────────────────────────────────────────────
-
-    private void setupIdleWatch() {
-        Toolkit.getDefaultToolkit().addAWTEventListener(
-                e -> lastActivityMs = System.currentTimeMillis(),
-                AWTEvent.KEY_EVENT_MASK | AWTEvent.MOUSE_EVENT_MASK | AWTEvent.MOUSE_MOTION_EVENT_MASK);
-
-        idleTimer = new Timer(20_000, e -> checkIdle());
-        idleTimer.start();
-    }
-
-    private void checkIdle() {
-        if (idleAsking || !sw.isRunning()) return;
-        if (!StopwatchModel.idleTooLong(System.currentTimeMillis(), lastActivityMs, cfg.idleMinutes)) return;
-
-        idleAsking = true;
-        stopStopwatch();                       // pausa enquanto pergunta
-        int r = JOptionPane.showConfirmDialog(dialogOwner(),
-                "Sem atividade há " + cfg.idleMinutes + " min.\nAinda está estudando?",
-                "Continuar?", JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE);
-        idleAsking = false;
-        lastActivityMs = System.currentTimeMillis();
-        if (r == JOptionPane.YES_OPTION) startStopwatch();   // retoma
-        // NÃO: continua pausado; o usuário decide salvar ou zerar
     }
 
     // ── BUILD UI ────────────────────────────────────────────────────────────
@@ -419,19 +391,20 @@ public class StudyTracker extends JFrame {
     /** Cartão de baixo: área + meta e as abas (ver TimerCard). O que os botões fazem fica aqui. */
     private JPanel buildBottom() {
         timerCard = new TimerCard(new TimerCard.Actions() {
-            public void areaChanged()          { pendingSubFoco = null; updateGoalProgress(); refreshProgressCard(); }
+            public void areaChanged()          { flow.pendingSubFoco = null; updateGoalProgress(); refreshProgressCard(); }
             public void goalDialog()           { showGoalDialog(); }
-            public void startStopwatch()       { StudyTracker.this.startStopwatch(); }
-            public void pauseStopwatch()       { stopStopwatch(); }
-            public void resetStopwatch()       { StudyTracker.this.resetStopwatch(); }
-            public void submitStopwatch()      { submitStopwatchTime(); }
-            public void addManual()            { addManualTime(); }
-            public void startFocus()           { startCountdown(true); enterFocusMode(false); }
-            public void startBreak()           { startCountdown(false); }
-            public void togglePausePomodoro()  { togglePauseCountdown(); }
-            public void resetPomodoro()        { stopCountdown(false); }
+            public void startStopwatch()       { flow.startStopwatch(); }
+            public void pauseStopwatch()       { flow.stopStopwatch(); }
+            public void resetStopwatch()       { flow.resetStopwatch(); }
+            public void submitStopwatch()      { flow.submitStopwatchTime(); }
+            public void addManual()            { flow.addManualTime(); }
+            public void startFocus()           { flow.startCountdown(true); flow.enterFocusMode(false); }
+            public void startBreak()           { flow.startCountdown(false); }
+            public void togglePausePomodoro()  { flow.togglePauseCountdown(); }
+            public void resetPomodoro()        { flow.stopCountdown(false); }
             public void autoCycleChanged(boolean on) { cfg.pomoAutoCycle = on; saveData(); }
         }, cfg.pomoAutoCycle);
+        flow.setCard(timerCard);
         subjectComboBox = timerCard.areaCombo();
         updatePomodoroCount();
         return timerCard.panel();
@@ -458,12 +431,12 @@ public class StudyTracker extends JFrame {
         });
         nowCard = new NowCard(new NowCard.Source() {
             public boolean sessionInProgress()     { return StudyTracker.this.sessionInProgress(); }
-            public boolean pomodoroBreak()         { return pomodoroActive() && !pomo.isFocus(); }
+            public boolean pomodoroBreak()         { return flow.pomodoroBreak(); }
             public String selectedArea()           { return (String) subjectComboBox.getSelectedItem(); }
             public Map<String, StudyData> areas()  { return studyDataMap; }
             public boolean isHardDay(LocalDate d)  { return StudyTracker.this.isHardDay(d); }
         }, suggester, skippedNow, new NowCard.Actions() {
-            public void focusMode()                       { enterFocusMode(true); }
+            public void focusMode()                       { flow.enterFocusMode(true); }
             public void start(String area, String sf)     { startArea(area, sf); }
             public void hardDay(LocalDate day) {
                 hardDays.add(day.toString());
@@ -486,10 +459,10 @@ public class StudyTracker extends JFrame {
             return;
         }
         subjectComboBox.setSelectedItem(area);
-        pendingSubFoco = subFoco;                      // depois do combo (o listener dele limpa)
+        flow.pendingSubFoco = subFoco;                 // depois do combo (o listener dele limpa)
         showScreen(SCR_HOJE);                           // o cronômetro fica na tela Hoje
         if (timerCard != null) timerCard.selectTab(0);   // aba Cronômetro
-        startStopwatch();
+        flow.startStopwatch();
     }
 
     // ── Semana planejada + cartão "Hoje" ─────────────────────────────────────
@@ -591,314 +564,6 @@ public class StudyTracker extends JFrame {
         timerCard.setPomoCount(n);
     }
 
-    // ── TIMERS ──────────────────────────────────────────────────────────────
-
-    private void setupTimers() {
-        stopwatch = new Timer(1000, e -> { sw.tick(); updateStopwatchLabel(); refreshFocusBar(); });
-        countdownTimer = new Timer(1000, e -> {
-            boolean acabou = pomo.tick();
-            updateCountdownLabel();
-            refreshFocusBar();
-            if (acabou) stopCountdown(true);
-        });
-    }
-
-    /**
-     * Põe botões e rótulos do cronômetro e do Pomodoro de acordo com o estado dos modelos.
-     * Necessário depois de rebuildUI() (trocar tema, importar backup): antes, uma sessão
-     * rodando voltava com "Iniciar" ligado, "Pausar" desligado e o combo de matéria livre.
-     */
-    private void syncTimerControls() {
-        updateStopwatchLabel();
-        timerCard.sync(sw, pomo);
-    }
-
-    // ── STOPWATCH ───────────────────────────────────────────────────────────
-
-    private void startStopwatch() {
-        if (subjectComboBox.getSelectedItem() == null) {
-            toast("Selecione uma matéria!"); return;
-        }
-        boolean novaSessao = sw.start();   // retomar não reabre o modo foco
-        lastActivityMs = System.currentTimeMillis();
-        stopwatch.start();
-        timerCard.stopwatchRunning();
-        updateStopwatchInfo();
-        refreshNowCard();
-        if (novaSessao) enterFocusMode(false);
-        refreshFocusBar();
-    }
-
-    private void stopStopwatch() {
-        sw.pause();
-        stopwatch.stop();
-        timerCard.stopwatchPaused(sw.hasTime());
-        updateStopwatchInfo();
-        refreshFocusBar();
-    }
-
-    /** Zera SOMENTE o cronômetro (o tempo acumulado da matéria não é tocado). */
-    private void resetStopwatch() {
-        sw.reset();
-        stopwatch.stop();
-        updateStopwatchLabel();
-        timerCard.stopwatchCleared();
-        if (!sessionInProgress()) exitFocusMode();   // sessão terminou (salva ou zerada)
-        refreshNowCard();
-    }
-
-    private void submitStopwatchTime() {
-        if (!sw.hasTime()) return;
-        String subject = (String) subjectComboBox.getSelectedItem();
-        int mins = sw.roundedMinutes();
-        if (sw.belowMinimum(cfg.minFocusMin)) {
-            toast("Abaixo do foco mínimo (" + cfg.minFocusMin + " min) — não salvo.");
-            return;   // mantém o tempo para o usuário continuar
-        }
-        addTime(subject, mins, "cronometro", askSessionDetails(subject, mins, "Sessão concluída"));
-        toast(formatTime(mins * 60) + " salvo em " + subject);
-        resetStopwatch();
-        transitionNudge();
-    }
-
-    /** Nudge gentil de pausa entre blocos. */
-    private void transitionNudge() {
-        if (cfg.transitionMin <= 0) return;
-        Timer t = new Timer(2600, e -> toast("Bloco salvo. Que tal " + cfg.transitionMin
-                + " min de pausa? Levanta, bebe água."));
-        t.setRepeats(false); t.start();
-    }
-
-    private void updateStopwatchLabel() {
-        timerCard.setStopwatchText(sw.elapsedText());
-        updateStopwatchInfo();
-    }
-
-    /** Linha auxiliar: pausas e tempo bruto (relógio de parede) desde o 1º "Iniciar". */
-    private void updateStopwatchInfo() {
-        if (timerCard == null) return;
-        timerCard.setStopwatchInfo(sw.infoText());
-        if (sw.shouldWarnHyperfocus(cfg.hyperfocusH))
-            toast("Você está há " + cfg.hyperfocusH + "h seguidas. Dá um respiro?");
-    }
-
-    // ── MODO FOCO ───────────────────────────────────────────────────────────
-    // Ao começar uma sessão, a janela some e fica só a faixa (FocusBar): o tempo à vista,
-    // nada competindo pela atenção. Volta sozinha quando a sessão termina.
-
-    private FocusBar focusBar;
-
-    private boolean pomodoroActive() { return pomo.isActive(); }
-
-    /** force = pedido explícito ("Modo foco" no cartão Agora), vale mesmo com o ajuste desligado. */
-    private void enterFocusMode(boolean force) {
-        if ((!cfg.focusMode && !force) || focusBar != null || !sessionInProgress()) return;
-        focusBar = new FocusBar(new FocusBar.Actions() {
-            public void togglePause() { focusTogglePause(); }
-            public void finish()      { focusFinish(); }
-            public void expand()      { exitFocusMode(); }
-        });
-        refreshFocusBar();
-        focusBar.setVisible(true);
-        setVisible(false);
-    }
-
-    private void exitFocusMode() {
-        if (focusBar == null) return;
-        focusBar.dispose();
-        focusBar = null;
-        setVisible(true);
-        setState(Frame.NORMAL);
-        toFront();
-        refreshNowCard();
-    }
-
-    private void focusTogglePause() {
-        if (pomodoroActive()) togglePauseCountdown();
-        else                  toggleStopwatch();
-    }
-
-    private void focusFinish() {
-        if (pomodoroActive()) {
-            if (!pomo.isFocus()) { stopCountdown(false); return; }   // encerrar a pausa não perde nada
-            int r = JOptionPane.showConfirmDialog(dialogOwner(),
-                    "Parar este bloco agora? O tempo dele não é salvo.\n"
-                  + "(Para salvar o tempo, use o cronômetro em vez do Pomodoro.)",
-                    "Parar Pomodoro", JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE);
-            if (r == JOptionPane.YES_OPTION) stopCountdown(false);
-        } else {
-            if (sw.isRunning()) stopStopwatch();   // conta como no "Salvar Tempo": pausa e salva
-            submitStopwatchTime();
-        }
-    }
-
-    /** Diálogos durante o modo foco aparecem junto da faixa (a janela principal está escondida). */
-    private Component dialogOwner() {
-        return focusBar != null ? focusBar : this;
-    }
-
-    private void refreshFocusBar() {
-        if (focusBar == null) return;
-        String area = (String) subjectComboBox.getSelectedItem();
-        StudyData sd = area == null ? null : studyDataMap.get(area);
-        Color cor = sd != null ? sd.getColor() : AppTheme.ACCENT;
-        String nome = area == null ? "" : area;
-        if (pendingSubFoco != null) nome += " · " + pendingSubFoco;
-
-        boolean pausado;
-        int correndo;   // minutos da sessão atual, ainda não salvos
-        String tempo, status, fim;
-        if (pomodoroActive()) {
-            pausado = pomo.isPaused();
-            tempo = pomo.remainingText();
-            fim = "Parar";
-            correndo = pomo.focusMinutesDone();
-            if (!pomo.isFocus()) {
-                nome = "Pausa do Pomodoro"; cor = AppTheme.ACCENT; area = null;
-                status = pausado ? "pausado" : "levanta, água, respira";
-            } else {
-                status = pausado ? "pausado" : "Pomodoro · " + pomo.currentFocusNumber() + "º foco";
-            }
-        } else {
-            pausado = !sw.isRunning();
-            tempo = sw.elapsedText();
-            correndo = sw.elapsedSeconds() / 60;
-            status = pausado ? "pausado" : "contando";
-            fim = "Terminar";
-        }
-
-        double frac = -1;
-        int ideal = area == null ? 0 : goals.getOrDefault(area, 0);
-        if (ideal > 0 && isGoalDay(area, LocalDate.now())) {
-            int feito = minutesOnDay(area, LocalDate.now()) + correndo;
-            frac = feito / (double) ideal;
-            status += "  ·  " + fmtHM(feito) + " de " + fmtHM(ideal) + " hoje";
-        }
-        focusBar.update(nome, cor, tempo, status, pausado, frac, fim);
-    }
-
-    // ── POMODORO ────────────────────────────────────────────────────────────
-
-    private void startCountdown(boolean isFocus) { startCountdown(isFocus, 0); }
-
-    private void startCountdown(boolean isFocus, int minutesOverride) {
-        String subject = (String) subjectComboBox.getSelectedItem();
-        if (isFocus && subject == null) { toast("Selecione uma matéria!"); return; }
-        if (countdownTimer != null) countdownTimer.stop(); // garante parado antes de reiniciar
-        int minutos = minutesOverride > 0 ? minutesOverride
-                : isFocus ? timerCard.focusMinutes()
-                          : timerCard.breakMinutes();
-        pomo.start(isFocus, minutos);
-        timerCard.pomodoroStarted(isFocus, subject);
-        updateCountdownLabel();
-        countdownTimer.start();
-        refreshNowCard();
-        refreshFocusBar();
-    }
-
-    private void stopCountdown(boolean finished) {
-        countdownTimer.stop();
-        pomo.halt();
-
-        if (finished) {
-            Toolkit.getDefaultToolkit().beep();
-            String subject = (String) subjectComboBox.getSelectedItem();
-            boolean didFocus = pomo.isFocus() && subject != null;
-            if (didFocus) {
-                // Ciclo automático não para pra perguntar: o próximo bloco começa sozinho.
-                SessionDetailsDialog.Details d;
-                if (cfg.pomoAutoCycle) d = SessionDetailsDialog.Details.of(pendingSubFoco);
-                else { exitFocusMode(); d = askSessionDetails(subject, pomo.plannedMinutes(), "Foco concluído"); }
-                addTime(subject, pomo.plannedMinutes(), "pomodoro", d);
-                pomo.completeFocus();
-                updatePomodoroCount();
-            }
-
-            if (cfg.pomoAutoCycle) {
-                if (didFocus) {
-                    boolean longBreak = pomo.longBreakDue();
-                    int mins = longBreak ? PomodoroModel.longBreakMinutes(timerCard.breakMinutes()) : 0;
-                    toast((longBreak ? "4 focos! Pausa longa de " + mins + " min." : "Foco concluído — pausa."));
-                    startCountdown(false, mins);
-                    return;                       // ciclo continua
-                } else {
-                    toast("Pausa concluída — de volta ao foco.");
-                    if (startCountdownIfPossible(true)) return;
-                }
-            } else {
-                exitFocusMode();   // o aviso de fim aparece com o app aberto
-                if (!didFocus) showInfoDialog("Pausa concluída", "Pronto para mais uma sessão?");
-            }
-        }
-
-        // Estado ocioso (não encadeou). Interrompido pelo usuário ⇒ o ciclo recomeça.
-        pomo.idle(finished, timerCard.focusMinutes());
-        updateCountdownLabel();
-        timerCard.pomodoroIdle();
-        if (!sessionInProgress()) exitFocusMode();
-        refreshNowCard();
-    }
-
-    /** Tenta iniciar o foco no ciclo automático; devolve false se não deu (ex.: sem matéria). */
-    private boolean startCountdownIfPossible(boolean isFocus) {
-        if (isFocus && subjectComboBox.getSelectedItem() == null) return false;
-        startCountdown(isFocus, 0);
-        return pomo.isRunning();
-    }
-
-    private void togglePauseCountdown() {
-        if (!pomo.togglePause()) {
-            // Retomou
-            countdownTimer.start();
-            timerCard.pomodoroResumed(pomo.isFocus(), subjectComboBox.getSelectedItem());
-        } else {
-            // Pausou
-            countdownTimer.stop();
-            timerCard.pomodoroPaused();
-        }
-        refreshFocusBar();
-    }
-
-    private void updateCountdownLabel() {
-        timerCard.setCountdown(pomo.remainingText());
-    }
-
-    // ── MANUAL ──────────────────────────────────────────────────────────────
-
-    private void addManualTime() {
-        String subject = (String) subjectComboBox.getSelectedItem();
-        if (subject == null) { toast("Selecione uma matéria!"); return; }
-        try {
-            int tot = timerCard.manualMinutes();
-            if (tot > 0) {
-                LocalDate today = LocalDate.now();
-                LocalDate day = timerCard.manualDay();
-                if (day.isAfter(today)) { toast("Não dá para registrar num dia que ainda não chegou."); return; }
-                String quando = day.equals(today) ? "" : " (" + TimerCard.dayLabel(day, today).toLowerCase() + ")";
-                addTime(subject, tot, "manual", askSessionDetails(subject, tot, "Tempo adicionado" + quando), day);
-                timerCard.clearManual();   // volta para "Hoje": registrar no passado é exceção, não padrão
-                toast(formatTime(tot * 60) + " adicionado a " + subject + quando);
-            } else { toast("Insira um tempo válido."); }
-        } catch (NumberFormatException ex) { toast("Apenas números, por favor."); }
-    }
-
-    // ── DATA (tempo + sessão) ────────────────────────────────────────────────
-
-    /** "Como foi?" (ver SessionDetailsDialog). No modo foco, aparece junto da faixa. */
-    private SessionDetailsDialog.Details askSessionDetails(String subject, int minutes, String titulo) {
-        return sessionDetails.ask(dialogOwner(), subject, minutes, titulo, pendingSubFoco);
-    }
-
-    /** Registra o tempo hoje (ver SessionRecorder). */
-    private void addTime(String subject, int minutes, String type, SessionDetailsDialog.Details d) {
-        recorder.add(subject, minutes, type, d);
-    }
-
-    /** Registra o tempo num dia (passado vira sessão às 12:00; ver SessionRecorder). */
-    private void addTime(String subject, int minutes, String type, SessionDetailsDialog.Details d, LocalDate day) {
-        recorder.add(subject, minutes, type, d, day);
-    }
-
     // ── PROGRESSÃO: cálculo por dia/semana/mês (derivado das sessões) ─────────
 
     /** Converte um timestamp em LocalDate no fuso local. */
@@ -970,9 +635,7 @@ public class StudyTracker extends JFrame {
     // ── GERENCIAMENTO DE MATÉRIAS (os diálogos ficam no AreaDialogs) ─────────
 
     /** Tem sessão em andamento (cronômetro com tempo ou Pomodoro rodando)? */
-    private boolean sessionInProgress() {
-        return sw.hasTime() || sw.isRunning() || pomodoroActive();
-    }
+    private boolean sessionInProgress() { return flow.sessionInProgress(); }
 
     // ── HISTÓRICO ───────────────────────────────────────────────────────────
 
@@ -1015,9 +678,8 @@ public class StudyTracker extends JFrame {
     private void toggleTheme() { settingsDialogs.chooseTheme(); }
 
     private void rebuildUI() {
-        // Para os tiques antigos; o estado das sessões está nos modelos (sw, pomo).
-        if (stopwatch != null) stopwatch.stop();
-        if (countdownTimer != null) countdownTimer.stop();
+        // Para os tiques antigos; o estado das sessões está nos modelos (ver SessionFlow).
+        flow.stopTicks();
         // buildUI() cria um combo novo: sem isso a matéria volta para o primeiro item.
         Object sel = subjectComboBox != null ? subjectComboBox.getSelectedItem() : null;
 
@@ -1027,15 +689,13 @@ public class StudyTracker extends JFrame {
         buildUI();
 
         // Reconecta listeners e restaura estado
-        setupTimers();
-        if (sw.isRunning())   stopwatch.start();
-        if (pomo.isRunning()) countdownTimer.start();
+        flow.restartTicks();
 
         refreshCombo();
         if (sel != null && studyDataMap.containsKey(sel) && !archived.contains(sel))
             subjectComboBox.setSelectedItem(sel);   // o listener do combo atualiza sub-foco e metas
         updateUI();
-        syncTimerControls();   // buildUI() recria as abas "paradas"; volta botões e rótulos ao estado real
+        flow.syncTimerControls();   // buildUI() recria as abas "paradas"; volta botões e rótulos ao estado real
         revalidate();
         repaint();
     }
@@ -1253,7 +913,7 @@ public class StudyTracker extends JFrame {
     // ── UTILS ───────────────────────────────────────────────────────────────
 
     private void toast(String msg) {
-        Window anchor = focusBar != null ? focusBar : this;   // app recolhido: aparece embaixo da faixa
+        Window anchor = flow.focusBar != null ? flow.focusBar : this;   // app recolhido: aparece embaixo da faixa
         JWindow w = new JWindow(anchor);
         JLabel lbl = new JLabel(msg);
         lbl.setFont(AppTheme.FONT_LABEL);
@@ -1268,7 +928,7 @@ public class StudyTracker extends JFrame {
         w.pack();
 
         int baseX = anchor.getX() + (anchor.getWidth() - w.getWidth()) / 2;
-        int endY  = focusBar != null ? anchor.getY() + anchor.getHeight() + 10
+        int endY  = flow.focusBar != null ? anchor.getY() + anchor.getHeight() + 10
                                      : getY() + getHeight() - w.getHeight() - 56;
         int slide = 18;
 
@@ -1300,12 +960,6 @@ public class StudyTracker extends JFrame {
 
     private void showInfoDialog(String title, String msg) {
         JOptionPane.showMessageDialog(this, msg, title, JOptionPane.INFORMATION_MESSAGE);
-    }
-
-    private String formatTime(int totalSeconds) {
-        int h = totalSeconds / 3600, m = (totalSeconds % 3600) / 60;
-        if (h > 0) return h + "h " + m + "min";
-        return m + " min";
     }
 
     private void initializeUI() {

@@ -45,7 +45,19 @@ class Fumaca {
         Files.write(p, s.getBytes(StandardCharsets.ISO_8859_1));
     }
 
-    static Object get(String n) { return get(st, n); }
+    /** Campo do app; o que mudou para o SessionFlow (cronômetro, Pomodoro, modo foco) é achado lá. */
+    static Object get(String n) { return get(temCampo(st, n) ? st : flow(), n); }
+
+    static Object flow() { return get(st, "flow"); }
+
+    static boolean temCampo(Object o, String n) {
+        try { o.getClass().getDeclaredField(n); return true; } catch (NoSuchFieldException e) { return false; }
+    }
+
+    static boolean temMetodo(Object o, String n) {
+        for (Method m : o.getClass().getDeclaredMethods()) if (m.getName().equals(n)) return true;
+        return false;
+    }
 
     /** Campo privado de qualquer objeto (ex.: um botão dentro do TimerCard). */
     static Object get(Object alvo, String n) {
@@ -64,7 +76,7 @@ class Fumaca {
           catch (Exception e) { throw new RuntimeException(e); }
     }
 
-    static Object call(String n, Object... args) { return call(st, n, args); }
+    static Object call(String n, Object... args) { return call(temMetodo(st, n) ? st : flow(), n, args); }
 
     static void edt(Runnable r) throws Exception { SwingUtilities.invokeAndWait(r); }
 
