@@ -23,6 +23,9 @@ public class FumacaAreas extends Fumaca {
             eq("depois: feito hoje acompanha", 30, call(stats, "minutesOnDay", "Cálculo", LocalDate.now()));
             eq("depois: nome antigo sem sessões", 0, call(stats, "minutesOnDay", "Calculo", LocalDate.now()));
             eq("ordem mantida", "[Cálculo, Física]", ((Map<?, ?>) get("studyDataMap")).keySet().toString());
+            List<String> tela = rotulos((java.awt.Container) get("areasScreen"));
+            eq("tela Áreas mostra o nome novo, uma vez", 1, Collections.frequency(tela, "Cálculo"));
+            eq("tela Áreas sem o nome antigo", false, tela.contains("Calculo"));
         });
 
         // .properties grava 'á' como á
@@ -34,5 +37,14 @@ public class FumacaAreas extends Fumaca {
         eq("arquivo de tarefas com o nome novo", true, tarefas.contains("C\\u00E1lculo|"));
 
         fim("Fumaça áreas");
+    }
+
+    static List<String> rotulos(java.awt.Container c) {
+        List<String> out = new ArrayList<>();
+        for (java.awt.Component k : c.getComponents()) {
+            if (k instanceof javax.swing.JLabel l) out.add(l.getText());
+            if (k instanceof java.awt.Container cc) out.addAll(rotulos(cc));
+        }
+        return out;
     }
 }

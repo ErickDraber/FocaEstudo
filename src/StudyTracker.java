@@ -230,7 +230,7 @@ public class StudyTracker extends JFrame {
     private JPanel       screens;
     private String       currentScreen = SCR_HOJE;
     private PlannerPanel weekScreen;
-    private JPanel       areasBody;
+    private AreasScreen  areasScreen;
 
     private void buildUI() {
         screens = new JPanel(new CardLayout());
@@ -266,50 +266,7 @@ public class StudyTracker extends JFrame {
         return sideNav;
     }
 
-    /** Cabeçalho das telas: título + dica + botões à direita (opcionais). */
-    private JPanel screenHeader(String title, String hint, JComponent... actions) {
-        JPanel h = new JPanel(new BorderLayout(12, 0));
-        h.setBackground(AppTheme.SURFACE);
-        h.setBorder(new CompoundBorder(
-                BorderFactory.createMatteBorder(0, 0, 1, 0, AppTheme.DIVIDER),
-                new EmptyBorder(12, 16, 12, 16)));
-        JPanel txt = new JPanel(new GridLayout(hint != null ? 2 : 1, 1, 0, 2));
-        txt.setOpaque(false);
-        JLabel t = new JLabel(title);
-        t.setFont(AppTheme.FONT_SECTION); t.setForeground(AppTheme.TEXT_PRI);
-        txt.add(t);
-        if (hint != null) {
-            JLabel l = new JLabel(hint);
-            l.setFont(AppTheme.FONT_SMALL); l.setForeground(AppTheme.TEXT_SEC);
-            txt.add(l);
-        }
-        JPanel btns = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
-        btns.setOpaque(false);
-        for (JComponent a : actions) btns.add(a);
-        h.add(txt,  BorderLayout.WEST);
-        h.add(btns, BorderLayout.EAST);
-        return h;
-    }
-
-    /** Painel que acompanha a largura do scroll (sem rolagem horizontal). */
-    private static class ScrollBody extends JPanel implements Scrollable {
-        ScrollBody(LayoutManager lm) { super(lm); setOpaque(false); }
-        public Dimension getPreferredScrollableViewportSize() { return getPreferredSize(); }
-        public int getScrollableUnitIncrement(Rectangle r, int o, int d) { return 16; }
-        public int getScrollableBlockIncrement(Rectangle r, int o, int d) { return r.height - 32; }
-        public boolean getScrollableTracksViewportWidth()  { return true; }
-        public boolean getScrollableTracksViewportHeight() { return false; }
-    }
-
-    private static JScrollPane quietScroll(JComponent body) {
-        JScrollPane sp = new JScrollPane(body,
-                JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED, JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
-        sp.setBorder(null);
-        sp.setOpaque(false);
-        sp.getViewport().setOpaque(false);
-        sp.getVerticalScrollBar().setUnitIncrement(16);
-        return sp;
-    }
+    // Cabeçalho, corpo rolável, botão pequeno e fmtHM moram no ScreenKit (comuns às telas).
 
     // ── TELA HOJE: o que fazer agora + cronômetro ──────────────────────────
 
@@ -319,7 +276,7 @@ public class StudyTracker extends JFrame {
     private JPanel todayGoalsBody, weekStripBody;
 
     private JPanel buildTodayScreen() {
-        ScrollBody body = new ScrollBody(new GridBagLayout());
+        ScreenKit.ScrollBody body = new ScreenKit.ScrollBody(new GridBagLayout());
         body.setBorder(new EmptyBorder(12, 12, 12, 12));
         GridBagConstraints c = new GridBagConstraints();
         c.gridx = 0; c.weightx = 1; c.fill = GridBagConstraints.HORIZONTAL;
@@ -338,7 +295,7 @@ public class StudyTracker extends JFrame {
         JPanel p = new JPanel(new BorderLayout());
         p.setBackground(AppTheme.BG);
         p.add(buildTodayHeader(), BorderLayout.NORTH);
-        p.add(quietScroll(body),  BorderLayout.CENTER);
+        p.add(ScreenKit.quietScroll(body),  BorderLayout.CENTER);
         p.add(buildBottom(),      BorderLayout.SOUTH);
         return p;
     }
@@ -583,105 +540,21 @@ public class StudyTracker extends JFrame {
         return colorMap;
     }
 
-    // ── TELA ÁREAS: criar, editar, arquivar e deletar ──────────────────────
-    // Esses botões ficavam sempre à vista embaixo do cronômetro (com o "Deletar" vermelho a
-    // um clique). Aqui cada área tem os seus, e mexer numa área não troca a do cronômetro.
+    // ── TELA ÁREAS: criar, editar, arquivar e deletar (a tela em si fica no AreasScreen) ──
 
     private JPanel buildAreasScreen() {
-        StyledButton add = new StyledButton("+ Área", StyledButton.Variant.FILLED);
-        add.addActionListener(e -> addNewSubject());
-        areasBody = new ScrollBody(null);
-        areasBody.setLayout(new BoxLayout(areasBody, BoxLayout.Y_AXIS));
-        areasBody.setBorder(new EmptyBorder(12, 16, 16, 16));
-
-        JPanel p = new JPanel(new BorderLayout());
-        p.setBackground(AppTheme.BG);
-        p.add(screenHeader("Áreas", "Suas áreas da vida, por tipo. O histórico de cada uma fica guardado.", add),
-                BorderLayout.NORTH);
-        p.add(quietScroll(areasBody), BorderLayout.CENTER);
-        return p;
-    }
-
-    private void refreshAreasScreen() {
-        if (areasBody == null) return;
-        areasBody.removeAll();
-        for (int t = 0; t < TYPE_KEYS.length; t++) {
-            List<String> doTipo = new ArrayList<>();
-            for (String s : studyDataMap.keySet())
-                if (!archived.contains(s) && typeOf(s).equals(TYPE_KEYS[t])) doTipo.add(s);
-            if (doTipo.isEmpty()) continue;
-            areasBody.add(areasSection(TYPE_LABELS[t]));
-            for (String s : doTipo) areasBody.add(areaRow(s, false));
-        }
-        if (!archived.isEmpty()) {
-            areasBody.add(areasSection("Arquivadas"));
-            for (String s : archived) if (studyDataMap.containsKey(s)) areasBody.add(areaRow(s, true));
-        }
-        areasBody.revalidate();
-        areasBody.repaint();
-    }
-
-    private JComponent areasSection(String label) {
-        JLabel l = new JLabel(label);
-        l.setFont(AppTheme.FONT_BOLD);
-        l.setForeground(AppTheme.TEXT_SEC);
-        l.setBorder(new EmptyBorder(areasBody.getComponentCount() == 0 ? 0 : 14, 4, 6, 0));
-        l.setAlignmentX(Component.LEFT_ALIGNMENT);
-        return l;
-    }
-
-    private JComponent areaRow(String area, boolean arquivada) {
-        StudyData sd = studyDataMap.get(area);
-        RoundedPanel row = new RoundedPanel(12, AppTheme.SURFACE);
-        row.setLayout(new GridBagLayout());   // nome e botões centralizados na mesma linha
-        row.setBorder(new EmptyBorder(4, 12, 4, 8));
-        row.setAlignmentX(Component.LEFT_ALIGNMENT);
-        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 46));
-
-        JLabel nome = new JLabel(area, PlannerPanel.dot(sd.getColor()), SwingConstants.LEFT);
-        nome.setIconTextGap(8);
-        nome.setFont(AppTheme.FONT_LABEL);
-        nome.setForeground(arquivada ? AppTheme.TEXT_SEC : AppTheme.TEXT_PRI);
-        JLabel total = new JLabel(fmtHM(sd.getMinutes()));
-        total.setFont(AppTheme.FONT_SMALL);
-        total.setForeground(AppTheme.TEXT_SEC);
-        JPanel left = new JPanel(new FlowLayout(FlowLayout.LEFT, 12, 0));
-        left.setOpaque(false);
-        left.add(nome); left.add(total);
-
-        JPanel btns = new JPanel(new FlowLayout(FlowLayout.RIGHT, 2, 0));
-        btns.setOpaque(false);
-        if (arquivada) {
-            btns.add(smallBtn("Reativar", StyledButton.Variant.TEXT, () -> unarchiveSubject(area)));
-        } else {
-            btns.add(smallBtn("Sub-focos", StyledButton.Variant.TEXT, () -> showSubFocosDialog(area)));
-            btns.add(smallBtn("Editar",   StyledButton.Variant.TEXT, () -> editSubjectName(area)));
-            btns.add(smallBtn("Cor",      StyledButton.Variant.TEXT, () -> changeSubjectColor(area)));
-            btns.add(smallBtn("Zerar",    StyledButton.Variant.TEXT, () -> zeroOutSubjectTime(area)));
-            btns.add(smallBtn("Arquivar", StyledButton.Variant.TEXT, () -> archiveSubject(area)));
-        }
-        btns.add(smallBtn("Deletar", StyledButton.Variant.TEXT, () -> deleteSubject(area)));
-
-        GridBagConstraints c = new GridBagConstraints();
-        c.gridy = 0; c.anchor = GridBagConstraints.WEST;
-        c.gridx = 0; c.weightx = 1; row.add(left, c);
-        c.gridx = 1; c.weightx = 0; row.add(btns, c);
-
-        JPanel wrap = new JPanel(new BorderLayout());   // espaço entre as linhas
-        wrap.setOpaque(false);
-        wrap.setBorder(new EmptyBorder(0, 0, 6, 0));
-        wrap.setAlignmentX(Component.LEFT_ALIGNMENT);
-        wrap.setMaximumSize(new Dimension(Integer.MAX_VALUE, 52));
-        wrap.add(row);
-        return wrap;
-    }
-
-    private static StyledButton smallBtn(String text, StyledButton.Variant v, Runnable r) {
-        StyledButton b = new StyledButton(text, v);
-        b.setFont(AppTheme.FONT_SMALL);
-        b.setBorder(BorderFactory.createEmptyBorder(4, 10, 4, 10));
-        b.addActionListener(e -> r.run());
-        return b;
+        areasScreen = new AreasScreen(studyDataMap, archived, this::typeOf, TYPE_KEYS, TYPE_LABELS,
+                new AreasScreen.Actions() {
+                    public void add()                  { addNewSubject(); }
+                    public void subFocos(String area)  { showSubFocosDialog(area); }
+                    public void edit(String area)      { editSubjectName(area); }
+                    public void color(String area)     { changeSubjectColor(area); }
+                    public void zero(String area)      { zeroOutSubjectTime(area); }
+                    public void archive(String area)   { archiveSubject(area); }
+                    public void unarchive(String area) { unarchiveSubject(area); }
+                    public void delete(String area)    { deleteSubject(area); }
+                });
+        return areasScreen;
     }
 
     // ── TELA PROGRESSO: donut, números e calendário ────────────────────────
@@ -694,7 +567,7 @@ public class StudyTracker extends JFrame {
 
         JPanel p = new JPanel(new BorderLayout());
         p.setBackground(AppTheme.BG);
-        p.add(screenHeader("Progresso", null, hist, stats), BorderLayout.NORTH);
+        p.add(ScreenKit.screenHeader("Progresso", null, hist, stats), BorderLayout.NORTH);
         p.add(buildCenter(), BorderLayout.CENTER);
         return p;
     }
@@ -1897,11 +1770,7 @@ public class StudyTracker extends JFrame {
         return dot;
     }
 
-    /** Formata minutos: "3h10" quando há horas, senão "52m". */
-    private static String fmtHM(int minutes) {
-        int h = minutes / 60, m = minutes % 60;
-        return h > 0 ? String.format("%dh%02d", h, m) : m + "m";
-    }
+    private static String fmtHM(int minutes) { return ScreenKit.fmtHM(minutes); }
 
     /** Quantos dias por semana a meta diária vale (7 se não houver restrição). */
     // ── TIPO DE ÁREA ────────────────────────────────────────────────────────
@@ -3457,7 +3326,7 @@ public class StudyTracker extends JFrame {
         updateGoalProgress();
         refreshStreaks();
         if (weekScreen != null) weekScreen.setAreas(activeAreas(), areaColors());
-        refreshAreasScreen();
+        if (areasScreen != null) areasScreen.refresh();
         refreshTodayCard();
         refreshNowCard();
         refreshBalanceCard();
