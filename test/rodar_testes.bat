@@ -22,4 +22,5 @@ java -Djava.awt.headless=true -cp "%OUT%" AreasScreenTest || set FALHOU=1
 java -Djava.awt.headless=true -cp "%OUT%" ProgressScreenTest || set FALHOU=1
 java -Djava.awt.headless=true -cp "%OUT%" NowCardTest || set FALHOU=1
 java -Djava.awt.headless=true -cp "%OUT%" TodayPanelsTest || set FALHOU=1
+java -Djava.awt.headless=true -cp "%OUT%" TimerCardTest || set FALHOU=1
 exit /b %FALHOU%

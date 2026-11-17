@@ -25,28 +25,18 @@ public class StudyTracker extends JFrame {
     private final List<ChecklistItem>     checklist    = new ArrayList<>();
 
     // --- UI principal ---
-    private JComboBox<String> subjectComboBox;
+    private JComboBox<String> subjectComboBox;   // o combo "Área:" do TimerCard (mesma instância)
     private JLabel        tvTotal;
-    private JPanel        goalBar;
-    private GaugeBar      goalProgress;
-    private JLabel        tvGoalLabel, tvGoalPercent;
     private NowCard       nowCard;
-    private CustomTabs    bottomTabs;
+    private TimerCard     timerCard;            // área + meta + abas Cronômetro / Manual / Pomodoro
 
     // --- Cronômetro: estado em StopwatchModel; o Timer do Swing só dá o tique de 1 s ---
     private final StopwatchModel sw = new StopwatchModel();
     private Timer  stopwatch;
-    private JLabel stopwatchLabel;
-    private JLabel stopwatchInfoLabel;         // "líquido · N pausas · bruto mm:ss"
-    private StyledButton startButton, stopButton, submitButton, resetStopwatchButton;
 
     // --- Pomodoro: estado em PomodoroModel; o Timer do Swing só dá o tique de 1 s ---
     private final PomodoroModel pomo = new PomodoroModel();
     private Timer   countdownTimer;
-    private JLabel  countdownLabel, statusLabel, pomoCountLabel;
-    private JSpinner focusSpinner, breakSpinner;
-    private JCheckBox autoCycleCheck;
-    private StyledButton startFocusButton, startBreakButton, stopCountdownButton, resetButton;
 
     // --- Inatividade ---
     private Timer idleTimer;
@@ -59,10 +49,6 @@ public class StudyTracker extends JFrame {
     // --- Recorrências ---
     private Timer   reminderTimer;
     private java.awt.TrayIcon trayIcon;
-
-    // --- Manual ---
-    private JTextField hoursField, minutesField;
-    private JComboBox<DayOption> manualDayCombo;
 
     // --- Detalhes da sessão: perguntados AO TERMINAR, não antes (menos decisões para começar) ---
     private String pendingSubFoco;   // sub-foco já escolhido (ex.: rodízio do "Agora"); vem marcado no "Como foi?"
@@ -386,83 +372,25 @@ public class StudyTracker extends JFrame {
     /** Também chamado quando a área do combo muda ou as tarefas mudam. */
     private void refreshProgressCard() { if (progressScreen != null) progressScreen.refreshProgressCard(); }
 
+    /** Cartão de baixo: área + meta e as abas (ver TimerCard). O que os botões fazem fica aqui. */
     private JPanel buildBottom() {
-        JPanel outer = new JPanel(new BorderLayout(0, 0));
-        outer.setBackground(AppTheme.BG);
-        outer.setBorder(new EmptyBorder(0, 12, 12, 12));
-
-        // Compacto: o cronômetro parado não precisa de meia tela (a Hoje é sobre o que fazer).
-        RoundedPanel card = new RoundedPanel(18, AppTheme.SURFACE);
-        card.setLayout(new BorderLayout(0, 2));
-        card.setBorder(new EmptyBorder(10, 16, 8, 16));
-
-        card.add(buildSubjectRow(), BorderLayout.NORTH);
-
-        // Tabs customizadas (sem fundo branco do JTabbedPane)
-        CustomTabs tabs = new CustomTabs();
-        bottomTabs = tabs;
-        // Sem ⏱ ✏ 🍅: a fonte do Swing no Windows mostra esses glifos como quadrados.
-        tabs.addTab("Cronômetro", buildStopwatchTab());
-        tabs.addTab("Manual",     buildManualTab());
-        tabs.addTab("Pomodoro",   buildPomodoroTab());
-        tabs.setPreferredSize(new Dimension(0, 130));
-        card.add(tabs, BorderLayout.CENTER);
-
-        outer.add(card);
-        return outer;
-    }
-
-    private JPanel buildSubjectRow() {
-        // [Área + Meta + barra de meta]. Nota, sub-foco e energia são perguntados ao terminar.
-        JPanel wrap = new JPanel();
-        wrap.setLayout(new BoxLayout(wrap, BoxLayout.Y_AXIS));
-        wrap.setOpaque(false);
-        wrap.setBorder(new EmptyBorder(0, 0, 4, 0));
-
-        JPanel row = new JPanel(new BorderLayout(10, 0));
-        row.setOpaque(false);
-        row.setAlignmentX(Component.LEFT_ALIGNMENT);
-
-        JPanel left = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
-        left.setOpaque(false);
-        JLabel lbl = new JLabel("Área:");
-        lbl.setFont(AppTheme.FONT_BOLD);
-        lbl.setForeground(AppTheme.TEXT_PRI);
-        subjectComboBox = new JComboBox<>();
-        styleInput(subjectComboBox);
-        subjectComboBox.setPreferredSize(new Dimension(220, 32));
-        subjectComboBox.addActionListener(e -> { pendingSubFoco = null; updateGoalProgress(); refreshProgressCard(); });
-        left.add(lbl); left.add(subjectComboBox);
-
-        StyledButton btnGoal = new StyledButton("Meta", StyledButton.Variant.TEXT);
-        btnGoal.setFont(AppTheme.FONT_SMALL);
-        btnGoal.addActionListener(e -> showGoalDialog());
-        left.add(btnGoal);
-
-        // Barra de meta (oculta por padrão)
-        goalBar = new JPanel(new BorderLayout(8, 0));
-        goalBar.setOpaque(false);
-        goalBar.setVisible(false);
-
-        tvGoalLabel   = new JLabel("Meta: 0h");
-        tvGoalLabel.setFont(AppTheme.FONT_SMALL); tvGoalLabel.setForeground(AppTheme.TEXT_SEC);
-        tvGoalPercent = new JLabel("0%");
-        tvGoalPercent.setFont(AppTheme.FONT_SMALL); tvGoalPercent.setForeground(AppTheme.ACCENT);
-        goalProgress = new GaugeBar();
-        goalProgress.setPreferredSize(new Dimension(0, 8));
-
-        JPanel gpRow = new JPanel(new BorderLayout(4, 0));
-        gpRow.setOpaque(false);
-        gpRow.add(tvGoalLabel,   BorderLayout.WEST);
-        gpRow.add(goalProgress,  BorderLayout.CENTER);
-        gpRow.add(tvGoalPercent, BorderLayout.EAST);
-        goalBar.add(gpRow);
-
-        row.add(left,    BorderLayout.WEST);
-        row.add(goalBar, BorderLayout.CENTER);
-
-        wrap.add(row);
-        return wrap;
+        timerCard = new TimerCard(new TimerCard.Actions() {
+            public void areaChanged()          { pendingSubFoco = null; updateGoalProgress(); refreshProgressCard(); }
+            public void goalDialog()           { showGoalDialog(); }
+            public void startStopwatch()       { StudyTracker.this.startStopwatch(); }
+            public void pauseStopwatch()       { stopStopwatch(); }
+            public void resetStopwatch()       { StudyTracker.this.resetStopwatch(); }
+            public void submitStopwatch()      { submitStopwatchTime(); }
+            public void addManual()            { addManualTime(); }
+            public void startFocus()           { startCountdown(true); enterFocusMode(false); }
+            public void startBreak()           { startCountdown(false); }
+            public void togglePausePomodoro()  { togglePauseCountdown(); }
+            public void resetPomodoro()        { stopCountdown(false); }
+            public void autoCycleChanged(boolean on) { cfg.pomoAutoCycle = on; saveData(); }
+        }, cfg.pomoAutoCycle);
+        subjectComboBox = timerCard.areaCombo();
+        updatePomodoroCount();
+        return timerCard.panel();
     }
 
     // ── CARTÃO DE PROGRESSO ──────────────────────────────────────────────────
@@ -516,7 +444,7 @@ public class StudyTracker extends JFrame {
         subjectComboBox.setSelectedItem(area);
         pendingSubFoco = subFoco;                      // depois do combo (o listener dele limpa)
         showScreen(SCR_HOJE);                           // o cronômetro fica na tela Hoje
-        if (bottomTabs != null) bottomTabs.select(0);   // aba Cronômetro
+        if (timerCard != null) timerCard.selectTab(0);   // aba Cronômetro
         startStopwatch();
     }
 
@@ -728,218 +656,14 @@ public class StudyTracker extends JFrame {
     private int weeklyGoalFor(String subject)                       { return stats.weeklyGoalFor(subject); }
     private int monthlyGoalFor(String subject)                      { return stats.monthlyGoalFor(subject); }
 
-    // ── TABS ────────────────────────────────────────────────────────────────
-
-    private JPanel buildStopwatchTab() {
-        JPanel p = new JPanel(new BorderLayout(0, 4));
-        p.setBackground(AppTheme.SURFACE);
-
-        JPanel head = new JPanel();
-        head.setLayout(new BoxLayout(head, BoxLayout.Y_AXIS));
-        head.setOpaque(false);
-        head.setBorder(new EmptyBorder(0, 6, 0, 0));
-
-        stopwatchLabel = new JLabel("00:00:00", SwingConstants.LEFT);
-        stopwatchLabel.setFont(AppTheme.FONT_MONO_S);
-        stopwatchLabel.setForeground(AppTheme.TEXT_PRI);
-        stopwatchLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
-
-        stopwatchInfoLabel = new JLabel(" ", SwingConstants.LEFT);
-        stopwatchInfoLabel.setFont(AppTheme.FONT_SMALL);
-        stopwatchInfoLabel.setForeground(AppTheme.TEXT_SEC);
-        stopwatchInfoLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
-
-        head.add(stopwatchLabel);
-        head.add(stopwatchInfoLabel);
-
-        startButton  = new StyledButton("Iniciar",        StyledButton.Variant.FILLED);
-        stopButton   = new StyledButton("Pausar",         StyledButton.Variant.OUTLINED);
-        resetStopwatchButton = new StyledButton("Zerar",  StyledButton.Variant.TEXT);
-        submitButton = new StyledButton("Salvar Tempo",   StyledButton.Variant.TONAL);
-        stopButton.setEnabled(false); submitButton.setEnabled(false); resetStopwatchButton.setEnabled(false);
-        startButton.addActionListener(e  -> startStopwatch());
-        stopButton.addActionListener(e   -> stopStopwatch());
-        resetStopwatchButton.addActionListener(e -> resetStopwatch());
-        submitButton.addActionListener(e -> submitStopwatchTime());
-
-        JPanel btns = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
-        btns.setOpaque(false);
-        btns.add(startButton); btns.add(stopButton);
-        btns.add(resetStopwatchButton); btns.add(submitButton);
-
-        JPanel line = new JPanel(new BorderLayout(12, 0));
-        line.setOpaque(false);
-        line.add(head, BorderLayout.WEST);
-        line.add(btns, BorderLayout.EAST);
-        p.add(line, BorderLayout.NORTH);
-        return p;
-    }
-
-    private JPanel buildManualTab() {
-        JPanel p = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 6));
-        p.setBackground(AppTheme.SURFACE);
-        hoursField   = styledField("Horas");
-        minutesField = styledField("Minutos");
-        StyledButton addBtn = new StyledButton("Adicionar Tempo", StyledButton.Variant.FILLED);
-        addBtn.addActionListener(e -> addManualTime());
-        manualDayCombo = new JComboBox<>();
-        manualDayCombo.setFont(AppTheme.FONT_SMALL);
-        manualDayCombo.setToolTipText("Dia em que o tempo foi feito. Esqueceu de registrar? Escolha o dia certo.");
-        fillManualDays(LocalDate.now());
-        // Os rótulos são relativos a hoje: refaz a lista ao abrir (o app pode passar da meia-noite aberto).
-        manualDayCombo.addPopupMenuListener(new javax.swing.event.PopupMenuListener() {
-            public void popupMenuWillBecomeVisible(javax.swing.event.PopupMenuEvent e) {
-                DayOption sel = (DayOption) manualDayCombo.getSelectedItem();
-                fillManualDays(sel != null && sel.custom ? sel.day : null);
-            }
-            public void popupMenuWillBecomeInvisible(javax.swing.event.PopupMenuEvent e) {}
-            public void popupMenuCanceled(javax.swing.event.PopupMenuEvent e) {}
-        });
-        manualDayCombo.addActionListener(e -> {
-            DayOption sel = (DayOption) manualDayCombo.getSelectedItem();
-            if (sel != null && sel.day == null) pickOtherManualDay();
-        });
-        p.add(new JLabel("Dia:")     {{ setFont(AppTheme.FONT_LABEL); setForeground(AppTheme.TEXT_PRI); }});
-        p.add(manualDayCombo);
-        p.add(new JLabel("Horas:")   {{ setFont(AppTheme.FONT_LABEL); setForeground(AppTheme.TEXT_PRI); }});
-        p.add(hoursField);
-        p.add(new JLabel("Minutos:") {{ setFont(AppTheme.FONT_LABEL); setForeground(AppTheme.TEXT_PRI); }});
-        p.add(minutesField);
-        p.add(Box.createHorizontalStrut(12));
-        p.add(addBtn);
-        return p;
-    }
-
-    private JPanel buildPomodoroTab() {
-        JPanel p = new JPanel(new BorderLayout(0, 0));
-        p.setBackground(AppTheme.SURFACE);
-
-        JPanel top = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 0));
-        top.setBackground(AppTheme.SURFACE);
-        focusSpinner = new JSpinner(new SpinnerNumberModel(25, 1, 120, 1));
-        breakSpinner = new JSpinner(new SpinnerNumberModel(5,  1,  60, 1));
-        styleSpinner(focusSpinner); styleSpinner(breakSpinner);
-
-        top.add(lbl("Foco (min):")); top.add(focusSpinner);
-        top.add(Box.createHorizontalStrut(16));
-        top.add(lbl("Pausa (min):")); top.add(breakSpinner);
-
-        autoCycleCheck = new JCheckBox("Ciclos automáticos", cfg.pomoAutoCycle);
-        autoCycleCheck.setOpaque(false);
-        autoCycleCheck.setFont(AppTheme.FONT_SMALL);
-        autoCycleCheck.setForeground(AppTheme.TEXT_SEC);
-        autoCycleCheck.setToolTipText("Encadeia foco → pausa → foco sozinho; pausa longa a cada 4 focos");
-        autoCycleCheck.addActionListener(e -> {
-            cfg.pomoAutoCycle = autoCycleCheck.isSelected();
-            saveData();
-        });
-        top.add(Box.createHorizontalStrut(16));
-        top.add(autoCycleCheck);
-
-        // Layout vertical centralizado: status | countdown | botões
-        JPanel mid = new JPanel();
-        mid.setLayout(new BoxLayout(mid, BoxLayout.Y_AXIS));
-        mid.setOpaque(false);
-
-        statusLabel = new JLabel("Pronto para iniciar", SwingConstants.CENTER);
-        statusLabel.setFont(AppTheme.FONT_SMALL);
-        statusLabel.setForeground(AppTheme.ACCENT);
-        statusLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
-
-        countdownLabel = new JLabel("25:00", SwingConstants.CENTER);
-        countdownLabel.setFont(AppTheme.FONT_MONO_S);
-        countdownLabel.setForeground(AppTheme.TEXT_PRI);
-        countdownLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
-
-        pomoCountLabel = new JLabel("", SwingConstants.CENTER);
-        pomoCountLabel.setFont(AppTheme.FONT_SMALL);
-        pomoCountLabel.setForeground(AppTheme.TEXT_SEC);
-        pomoCountLabel.setAlignmentX(Component.CENTER_ALIGNMENT);
-
-        // Foco: inicia sessão de foco
-        startFocusButton    = new StyledButton("Foco",   StyledButton.Variant.FILLED);
-        // Descanso: inicia pausa/descanso
-        startBreakButton    = new StyledButton("Descanso", StyledButton.Variant.TONAL);
-        // Pausar/Retomar: pausa e retoma o timer atual
-        stopCountdownButton = new StyledButton("Pausar", StyledButton.Variant.OUTLINED);
-        // Resetar: cancela tudo
-        resetButton         = new StyledButton("Resetar", StyledButton.Variant.TEXT);
-
-        stopCountdownButton.setEnabled(false);
-        resetButton.setEnabled(false);
-        // Descanso sempre disponível, não depende de ter rodado Foco antes
-        startBreakButton.setEnabled(true);
-
-        startFocusButton.addActionListener(e    -> { startCountdown(true); enterFocusMode(false); });
-        startBreakButton.addActionListener(e    -> startCountdown(false));
-        stopCountdownButton.addActionListener(e -> togglePauseCountdown());
-        resetButton.addActionListener(e         -> stopCountdown(false));
-
-        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.CENTER, 8, 0));
-        buttons.setOpaque(false);
-        buttons.add(startFocusButton);
-        buttons.add(startBreakButton);
-        buttons.add(stopCountdownButton);
-        buttons.add(resetButton);
-        buttons.setAlignmentX(Component.CENTER_ALIGNMENT);
-
-        statusLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
-        countdownLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
-        countdownLabel.setHorizontalAlignment(SwingConstants.LEFT);
-        pomoCountLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
-        mid.setBorder(new EmptyBorder(0, 6, 0, 0));
-        mid.add(countdownLabel);
-        mid.add(statusLabel);
-        mid.add(pomoCountLabel);
-        buttons.setLayout(new FlowLayout(FlowLayout.RIGHT, 8, 0));
-
-        JPanel line = new JPanel(new BorderLayout(12, 0));
-        line.setOpaque(false);
-        line.setBorder(new EmptyBorder(6, 0, 0, 0));
-        line.add(mid,     BorderLayout.WEST);
-        line.add(buttons, BorderLayout.EAST);
-        p.add(top,  BorderLayout.NORTH);
-        p.add(line, BorderLayout.CENTER);
-        updatePomodoroCount();
-        return p;
-    }
-
     /** "🍅 N hoje" — conta sessões do tipo pomodoro registradas hoje. */
     private void updatePomodoroCount() {
-        if (pomoCountLabel == null) return;
+        if (timerCard == null) return;
         LocalDate today = LocalDate.now();
         int n = 0;
         for (StudySession s : sessions)
             if ("pomodoro".equals(s.getType()) && dateOf(s.getTimestamp()).equals(today)) n++;
-        pomoCountLabel.setText(n == 0 ? "" : n + (n == 1 ? " foco hoje" : " focos hoje"));
-    }
-
-    // ── HELPERS UI ──────────────────────────────────────────────────────────
-
-    private JLabel lbl(String text) {
-        JLabel l = new JLabel(text); l.setFont(AppTheme.FONT_LABEL); l.setForeground(AppTheme.TEXT_PRI); return l;
-    }
-
-    private JTextField styledField(String hint) {
-        JTextField f = new JTextField(6);
-        f.setToolTipText(hint);
-        styleInput(f);
-        return f;
-    }
-
-    /** Padroniza a fonte dos campos. O Nimbus cuida das cores conforme o tema. */
-    static void styleInput(JComponent c) {
-        c.setFont(AppTheme.FONT_LABEL);
-        if (c instanceof JSpinner) {
-            JComponent ed = ((JSpinner) c).getEditor();
-            if (ed instanceof JSpinner.DefaultEditor)
-                ((JSpinner.DefaultEditor) ed).getTextField().setFont(AppTheme.FONT_LABEL);
-        }
-    }
-
-    private void styleSpinner(JSpinner sp) {
-        sp.setPreferredSize(new Dimension(74, 30));
-        styleInput(sp);
+        timerCard.setPomoCount(n);
     }
 
     // ── TIMERS ──────────────────────────────────────────────────────────────
@@ -960,32 +684,8 @@ public class StudyTracker extends JFrame {
      * rodando voltava com "Iniciar" ligado, "Pausar" desligado e o combo de matéria livre.
      */
     private void syncTimerControls() {
-        boolean swOn = sw.isRunning();
         updateStopwatchLabel();
-        startButton.setText(sw.started() ? "Retomar" : "Iniciar");
-        startButton.setEnabled(!swOn);
-        stopButton.setEnabled(swOn);
-        submitButton.setEnabled(!swOn && sw.hasTime());
-        resetStopwatchButton.setEnabled(swOn || sw.hasTime());
-
-        boolean pomoOn = pomo.isActive();
-        startFocusButton.setEnabled(!pomoOn);
-        startBreakButton.setEnabled(!pomoOn);
-        stopCountdownButton.setEnabled(pomoOn);
-        stopCountdownButton.setText(pomo.isPaused() ? "Retomar" : "Pausar");
-        resetButton.setEnabled(pomoOn);
-        if (pomoOn) {
-            updateCountdownLabel();
-            if (pomo.isPaused()) {
-                statusLabel.setText("Pausado"); statusLabel.setForeground(AppTheme.WARNING);
-            } else if (pomo.isFocus()) {
-                statusLabel.setText("Focando em " + subjectComboBox.getSelectedItem() + "…");
-                statusLabel.setForeground(AppTheme.SUCCESS);
-            } else {
-                statusLabel.setText("Em pausa…"); statusLabel.setForeground(AppTheme.ACCENT);
-            }
-        }
-        subjectComboBox.setEnabled(!swOn && !pomoOn);   // sessão contando: o tempo não pode mudar de área
+        timerCard.sync(sw, pomo);
     }
 
     // ── STOPWATCH ───────────────────────────────────────────────────────────
@@ -997,10 +697,7 @@ public class StudyTracker extends JFrame {
         boolean novaSessao = sw.start();   // retomar não reabre o modo foco
         lastActivityMs = System.currentTimeMillis();
         stopwatch.start();
-        startButton.setText("Retomar");
-        startButton.setEnabled(false); stopButton.setEnabled(true);
-        submitButton.setEnabled(false); resetStopwatchButton.setEnabled(true);
-        subjectComboBox.setEnabled(false);
+        timerCard.stopwatchRunning();
         updateStopwatchInfo();
         refreshNowCard();
         if (novaSessao) enterFocusMode(false);
@@ -1010,10 +707,7 @@ public class StudyTracker extends JFrame {
     private void stopStopwatch() {
         sw.pause();
         stopwatch.stop();
-        startButton.setEnabled(true); stopButton.setEnabled(false);
-        submitButton.setEnabled(sw.hasTime());
-        resetStopwatchButton.setEnabled(sw.hasTime());
-        subjectComboBox.setEnabled(true);
+        timerCard.stopwatchPaused(sw.hasTime());
         updateStopwatchInfo();
         refreshFocusBar();
     }
@@ -1023,12 +717,7 @@ public class StudyTracker extends JFrame {
         sw.reset();
         stopwatch.stop();
         updateStopwatchLabel();
-        startButton.setText("Iniciar");
-        startButton.setEnabled(true);
-        stopButton.setEnabled(false);
-        submitButton.setEnabled(false);
-        resetStopwatchButton.setEnabled(false);
-        subjectComboBox.setEnabled(true);
+        timerCard.stopwatchCleared();
         if (!sessionInProgress()) exitFocusMode();   // sessão terminou (salva ou zerada)
         refreshNowCard();
     }
@@ -1056,14 +745,14 @@ public class StudyTracker extends JFrame {
     }
 
     private void updateStopwatchLabel() {
-        stopwatchLabel.setText(sw.elapsedText());
+        timerCard.setStopwatchText(sw.elapsedText());
         updateStopwatchInfo();
     }
 
     /** Linha auxiliar: pausas e tempo bruto (relógio de parede) desde o 1º "Iniciar". */
     private void updateStopwatchInfo() {
-        if (stopwatchInfoLabel == null) return;
-        stopwatchInfoLabel.setText(sw.infoText());
+        if (timerCard == null) return;
+        timerCard.setStopwatchInfo(sw.infoText());
         if (sw.shouldWarnHyperfocus(cfg.hyperfocusH))
             toast("Você está há " + cfg.hyperfocusH + "h seguidas. Dá um respiro?");
     }
@@ -1172,19 +861,12 @@ public class StudyTracker extends JFrame {
         if (isFocus && subject == null) { toast("Selecione uma matéria!"); return; }
         if (countdownTimer != null) countdownTimer.stop(); // garante parado antes de reiniciar
         int minutos = minutesOverride > 0 ? minutesOverride
-                : isFocus ? (int) focusSpinner.getValue()
-                          : (int) breakSpinner.getValue();
+                : isFocus ? timerCard.focusMinutes()
+                          : timerCard.breakMinutes();
         pomo.start(isFocus, minutos);
-        statusLabel.setText(isFocus ? "Focando em " + subject + "…" : "Em pausa…");
-        statusLabel.setForeground(isFocus ? AppTheme.SUCCESS : AppTheme.ACCENT);
+        timerCard.pomodoroStarted(isFocus, subject);
         updateCountdownLabel();
         countdownTimer.start();
-        startFocusButton.setEnabled(false);
-        startBreakButton.setEnabled(false);
-        stopCountdownButton.setEnabled(true);
-        stopCountdownButton.setText("Pausar");
-        resetButton.setEnabled(true);
-        subjectComboBox.setEnabled(false);
         refreshNowCard();
         refreshFocusBar();
     }
@@ -1210,7 +892,7 @@ public class StudyTracker extends JFrame {
             if (cfg.pomoAutoCycle) {
                 if (didFocus) {
                     boolean longBreak = pomo.longBreakDue();
-                    int mins = longBreak ? PomodoroModel.longBreakMinutes((int) breakSpinner.getValue()) : 0;
+                    int mins = longBreak ? PomodoroModel.longBreakMinutes(timerCard.breakMinutes()) : 0;
                     toast((longBreak ? "4 focos! Pausa longa de " + mins + " min." : "Foco concluído — pausa."));
                     startCountdown(false, mins);
                     return;                       // ciclo continua
@@ -1225,14 +907,9 @@ public class StudyTracker extends JFrame {
         }
 
         // Estado ocioso (não encadeou). Interrompido pelo usuário ⇒ o ciclo recomeça.
-        pomo.idle(finished, (int) focusSpinner.getValue());
-        statusLabel.setText("Pronto para iniciar"); statusLabel.setForeground(AppTheme.ACCENT);
+        pomo.idle(finished, timerCard.focusMinutes());
         updateCountdownLabel();
-        startFocusButton.setEnabled(true); startBreakButton.setEnabled(true);
-        stopCountdownButton.setEnabled(false);
-        stopCountdownButton.setText("Pausar");
-        resetButton.setEnabled(false);
-        subjectComboBox.setEnabled(true);
+        timerCard.pomodoroIdle();
         if (!sessionInProgress()) exitFocusMode();
         refreshNowCard();
     }
@@ -1248,22 +925,17 @@ public class StudyTracker extends JFrame {
         if (!pomo.togglePause()) {
             // Retomou
             countdownTimer.start();
-            stopCountdownButton.setText("Pausar");
-            statusLabel.setText(pomo.isFocus()
-                    ? "Focando em " + subjectComboBox.getSelectedItem() + "…"
-                    : "Em pausa…");
+            timerCard.pomodoroResumed(pomo.isFocus(), subjectComboBox.getSelectedItem());
         } else {
             // Pausou
             countdownTimer.stop();
-            stopCountdownButton.setText("Retomar");
-            statusLabel.setText("Pausado");
-            statusLabel.setForeground(AppTheme.WARNING);
+            timerCard.pomodoroPaused();
         }
         refreshFocusBar();
     }
 
     private void updateCountdownLabel() {
-        countdownLabel.setText(pomo.remainingText());
+        timerCard.setCountdown(pomo.remainingText());
     }
 
     // ── MANUAL ──────────────────────────────────────────────────────────────
@@ -1272,80 +944,17 @@ public class StudyTracker extends JFrame {
         String subject = (String) subjectComboBox.getSelectedItem();
         if (subject == null) { toast("Selecione uma matéria!"); return; }
         try {
-            int h   = hoursField.getText().trim().isEmpty()   ? 0 : Integer.parseInt(hoursField.getText().trim());
-            int m   = minutesField.getText().trim().isEmpty() ? 0 : Integer.parseInt(minutesField.getText().trim());
-            int tot = h * 60 + m;
+            int tot = timerCard.manualMinutes();
             if (tot > 0) {
-                DayOption sel = (DayOption) manualDayCombo.getSelectedItem();
                 LocalDate today = LocalDate.now();
-                LocalDate day = (sel == null || sel.day == null) ? today : sel.day;
+                LocalDate day = timerCard.manualDay();
                 if (day.isAfter(today)) { toast("Não dá para registrar num dia que ainda não chegou."); return; }
-                String quando = day.equals(today) ? "" : " (" + dayLabel(day, today).toLowerCase() + ")";
+                String quando = day.equals(today) ? "" : " (" + TimerCard.dayLabel(day, today).toLowerCase() + ")";
                 addTime(subject, tot, "manual", askSessionDetails(subject, tot, "Tempo adicionado" + quando), day);
-                hoursField.setText(""); minutesField.setText("");
-                fillManualDays(null);   // volta para "Hoje": registrar no passado é exceção, não padrão
+                timerCard.clearManual();   // volta para "Hoje": registrar no passado é exceção, não padrão
                 toast(formatTime(tot * 60) + " adicionado a " + subject + quando);
             } else { toast("Insira um tempo válido."); }
         } catch (NumberFormatException ex) { toast("Apenas números, por favor."); }
-    }
-
-    /** Opção do combo "Dia" da aba Manual. day == null ⇒ "Outra data…". */
-    private static final class DayOption {
-        final LocalDate day; final String label; final boolean custom;
-        DayOption(LocalDate day, String label, boolean custom) { this.day = day; this.label = label; this.custom = custom; }
-        @Override public String toString() { return label; }
-    }
-
-    private static final String[] DOW_PT = {"seg", "ter", "qua", "qui", "sex", "sáb", "dom"};
-
-    /** "Hoje", "Ontem" ou "seg 02/11". */
-    private static String dayLabel(LocalDate d, LocalDate today) {
-        if (d.equals(today)) return "Hoje";
-        if (d.equals(today.minusDays(1))) return "Ontem";
-        return DOW_PT[d.getDayOfWeek().getValue() - 1] + " " + String.format("%02d/%02d", d.getDayOfMonth(), d.getMonthValue())
-             + (d.getYear() != today.getYear() ? "/" + d.getYear() : "");
-    }
-
-    /** Hoje + 6 dias anteriores + "Outra data…". custom != null entra na lista e fica selecionado. */
-    private void fillManualDays(LocalDate custom) {
-        LocalDate today = LocalDate.now();
-        DefaultComboBoxModel<DayOption> m = new DefaultComboBoxModel<>();
-        DayOption select = null;
-        for (int i = 0; i < 7; i++) {
-            LocalDate d = today.minusDays(i);
-            DayOption o = new DayOption(d, dayLabel(d, today), false);
-            m.addElement(o);
-            if (i == 0 || d.equals(custom)) select = o;
-        }
-        if (custom != null && !custom.isAfter(today) && custom.isBefore(today.minusDays(6))) {
-            select = new DayOption(custom, dayLabel(custom, today), true);
-            m.addElement(select);
-        }
-        m.addElement(new DayOption(null, "Outra data…", false));
-        m.setSelectedItem(select);
-        manualDayCombo.setModel(m);
-    }
-
-    /** Pede uma data qualquer (até hoje). Cancelar volta para "Hoje". */
-    private void pickOtherManualDay() {
-        LocalDate today = LocalDate.now();
-        Date max = Date.from(today.atStartOfDay(ZoneId.systemDefault()).toInstant());
-        Date ini = Date.from(today.minusDays(7).atStartOfDay(ZoneId.systemDefault()).toInstant());
-        JSpinner sp = new JSpinner(new SpinnerDateModel(ini, null, max, Calendar.DAY_OF_MONTH));
-        sp.setEditor(new JSpinner.DateEditor(sp, "dd/MM/yyyy"));
-        JPanel pn = new JPanel(new BorderLayout(0, 6));
-        pn.add(new JLabel("Em que dia foi?"), BorderLayout.NORTH);
-        pn.add(sp, BorderLayout.CENTER);
-        SwingUtilities.invokeLater(() -> {
-            int r = JOptionPane.showConfirmDialog(this, pn, "Outra data", JOptionPane.OK_CANCEL_OPTION,
-                    JOptionPane.PLAIN_MESSAGE);
-            LocalDate d = null;
-            if (r == JOptionPane.OK_OPTION) {
-                d = Instant.ofEpochMilli(((Date) sp.getValue()).getTime()).atZone(ZoneId.systemDefault()).toLocalDate();
-                if (d.isAfter(today)) d = today;
-            }
-            fillManualDays(d);
-        });
     }
 
     // ── DATA (tempo + sessão) ────────────────────────────────────────────────
@@ -1816,18 +1425,12 @@ public class StudyTracker extends JFrame {
     private void updateGoalProgress() {
         String subject = (String) subjectComboBox.getSelectedItem();
         if (subject == null || !goals.containsKey(subject) || goals.get(subject) <= 0) {
-            goalBar.setVisible(false); return;
+            timerCard.hideGoal(); return;
         }
         int goal    = goals.get(subject);
         int current = minutesOnDay(subject, LocalDate.now());
-        int pct     = (int) Math.min(100, current * 100.0 / goal);
-        goalBar.setVisible(true);
-        int gh = current / 60, gm = current % 60, goalH = goal / 60, goalM = goal % 60;
-        tvGoalLabel.setText(String.format("%dh%02dm / %dh%02dm", gh, gm, goalH, goalM));
-        tvGoalPercent.setText(pct + "%");
         Color base = studyDataMap.getOrDefault(subject, new StudyData(0, AppTheme.ACCENT)).getColor();
-        tvGoalPercent.setForeground(current >= goal ? AppTheme.SUCCESS : base);
-        goalProgress.set(current / (double) goal, base, current >= goal);
+        timerCard.showGoal(current, goal, base);
     }
 
     // ── GERENCIAMENTO DE MATÉRIAS ────────────────────────────────────────────
@@ -2148,7 +1751,7 @@ public class StudyTracker extends JFrame {
         cfg.updateCheck   = cbUpdate.isSelected();
         String rem = (String) cbReminder.getSelectedItem();
         cfg.reminderHour = (rem == null || rem.startsWith("Des")) ? -1 : Integer.parseInt(rem.substring(0, 2));
-        if (autoCycleCheck != null) autoCycleCheck.setSelected(cfg.pomoAutoCycle);
+        if (timerCard != null) timerCard.setAutoCycle(cfg.pomoAutoCycle);
         saveData();
         toast("Ajustes salvos.");
     }

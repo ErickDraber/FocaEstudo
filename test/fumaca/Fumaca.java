@@ -45,8 +45,11 @@ class Fumaca {
         Files.write(p, s.getBytes(StandardCharsets.ISO_8859_1));
     }
 
-    static Object get(String n) {
-        try { Field f = st.getClass().getDeclaredField(n); f.setAccessible(true); return f.get(st); }
+    static Object get(String n) { return get(st, n); }
+
+    /** Campo privado de qualquer objeto (ex.: um botão dentro do TimerCard). */
+    static Object get(Object alvo, String n) {
+        try { Field f = alvo.getClass().getDeclaredField(n); f.setAccessible(true); return f.get(alvo); }
         catch (Exception e) { throw new RuntimeException(e); }
     }
 

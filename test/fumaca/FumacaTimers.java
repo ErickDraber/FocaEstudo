@@ -19,8 +19,13 @@ public class FumacaTimers extends Fumaca {
                 for (ActionListener l : t.getActionListeners()) l.actionPerformed(new ActionEvent(t, 0, ""));
         });
     }
-    static boolean en(String f) { return ((JComponent) get(f)).isEnabled(); }
-    static String txt(String f) { Object o = get(f); return o instanceof JLabel ? ((JLabel) o).getText() : ((AbstractButton) o).getText(); }
+    /** Botões e rótulos das abas moram no TimerCard; o combo de área continua no StudyTracker. */
+    static Object comp(String f) {
+        try { return get(get("timerCard"), f); }
+        catch (RuntimeException e) { return get(f); }
+    }
+    static boolean en(String f) { return ((JComponent) comp(f)).isEnabled(); }
+    static String txt(String f) { Object o = comp(f); return o instanceof JLabel ? ((JLabel) o).getText() : ((AbstractButton) o).getText(); }
     static int nSessions() { return ((List<?>) get("sessions")).size(); }
 
     public static void main(String[] a) throws Exception {
