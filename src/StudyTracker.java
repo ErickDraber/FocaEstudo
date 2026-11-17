@@ -55,14 +55,6 @@ public class StudyTracker extends JFrame {
     // Sub-focos por área: tópicos / grupos musculares / hobbies. Ordem preservada.
     private final Map<String, java.util.List<String>> subFocos = new LinkedHashMap<>();
 
-    private static String[] subFocoPreset(String type) {
-        switch (type) {
-            case "fisico": return new String[]{"Peito", "Costas", "Perna", "Ombro", "Braço", "Core", "Cardio"};
-            case "estudo": return new String[]{"Teoria", "Exercícios", "Revisão"};
-            default:       return new String[0];
-        }
-    }
-
     // --- Áreas: tipo de cada área ("estudo"|"fisico"|"lazer"|"trabalho"|"outro"). Ausente = "estudo". ---
     private final Map<String, String> areaType = new LinkedHashMap<>();
     private static final String[] TYPE_KEYS   = AreaTypes.KEYS;
@@ -124,6 +116,20 @@ public class StudyTracker extends JFrame {
         public String typeOf(String area)    { return StudyTracker.this.typeOf(area); }
         public int minutesByType(String type, LocalDate a, LocalDate b) { return minutesByTypeInRange(type, a, b); }
     });
+
+    // Diálogos da tela Áreas (nova, editar, cor, sub-focos, zerar, arquivar, reativar, deletar). Mesmas coleções.
+    private final AreaDialogs areaDialogs = new AreaDialogs(studyDataMap, archived, areaType, subFocos, areas,
+            new AreaDialogs.Host() {
+        public void changed()               { updateUI(); }
+        public void toast(String msg)       { StudyTracker.this.toast(msg); }
+        public void refreshCombo()          { StudyTracker.this.refreshCombo(); }
+        public Object selectedArea()        { return subjectComboBox.getSelectedItem(); }
+        public void selectArea(Object area) { subjectComboBox.setSelectedItem(area); }
+        public boolean sessionInProgress()  { return StudyTracker.this.sessionInProgress(); }
+        public void saveData()              { StudyTracker.this.saveData(); }
+        public void saveSessions()          { StudyTracker.this.saveSessions(); }
+        public void saveChecklist()         { StudyTracker.this.saveChecklist(); }
+    }, AreaDialogs.swingPrompt(this));
 
     // --- Estado de persistência ---
     private boolean ready  = false;  // true quando a UI terminou de carregar
@@ -345,14 +351,14 @@ public class StudyTracker extends JFrame {
     private JPanel buildAreasScreen() {
         areasScreen = new AreasScreen(studyDataMap, archived, this::typeOf, TYPE_KEYS, TYPE_LABELS,
                 new AreasScreen.Actions() {
-                    public void add()                  { addNewSubject(); }
-                    public void subFocos(String area)  { showSubFocosDialog(area); }
-                    public void edit(String area)      { editSubjectName(area); }
-                    public void color(String area)     { changeSubjectColor(area); }
-                    public void zero(String area)      { zeroOutSubjectTime(area); }
-                    public void archive(String area)   { archiveSubject(area); }
-                    public void unarchive(String area) { unarchiveSubject(area); }
-                    public void delete(String area)    { deleteSubject(area); }
+                    public void add()                  { areaDialogs.add(); }
+                    public void subFocos(String area)  { areaDialogs.subFocos(area); }
+                    public void edit(String area)      { areaDialogs.edit(area); }
+                    public void color(String area)     { areaDialogs.color(area); }
+                    public void zero(String area)      { areaDialogs.zero(area); }
+                    public void archive(String area)   { areaDialogs.archive(area); }
+                    public void unarchive(String area) { areaDialogs.unarchive(area); }
+                    public void delete(String area)    { areaDialogs.delete(area); }
                 });
         return areasScreen;
     }
@@ -536,8 +542,6 @@ public class StudyTracker extends JFrame {
 
     private String typeOf(String area) { return areaType.getOrDefault(area, "estudo"); }
 
-    private static int typeIndex(String key)      { return AreaTypes.index(key); }
-    private static String typeLabel(String key)   { return AreaTypes.label(key); }
     private static Color typeColor(String key)    { return AreaTypes.color(key); }
 
     /** Minutos estudados por tipo numa janela de datas [start, end]. */
@@ -1086,130 +1090,11 @@ public class StudyTracker extends JFrame {
         timerCard.showGoal(current, goal, base);
     }
 
-    // ── GERENCIAMENTO DE MATÉRIAS ────────────────────────────────────────────
-
-    private void addNewSubject() {
-        JTextField fName = new JTextField(18);
-        JComboBox<String> cbType = tipoCombo("estudo");
-        JPanel panel = new JPanel(new GridBagLayout());
-        GridBagConstraints c = new GridBagConstraints();
-        c.insets = new Insets(4, 4, 4, 4); c.anchor = GridBagConstraints.WEST;
-        addFormRow(panel, c, 0, "Nome:", fName);
-        addFormRow(panel, c, 1, "Tipo:", cbType);
-
-        int r = JOptionPane.showConfirmDialog(this, panel, "Nova área",
-                JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
-        if (r != JOptionPane.OK_OPTION) return;
-        String name = Areas.cleanName(fName.getText());
-        if (name.isEmpty()) return;
-        String type = TYPE_KEYS[Math.max(0, cbType.getSelectedIndex())];
-
-        if (archived.contains(name)) { unarchiveSubject(name); return; }   // era arquivada → desarquiva
-        if (studyDataMap.containsKey(name)) { toast("Essa área já existe!"); return; }
-        areas.add(name, type);
-        refreshCombo(); selectIfIdle(name); updateUI();
-    }
-
-    private void unarchiveSubject(String name) {
-        if (!archived.remove(name)) return;
-        refreshCombo(); selectIfIdle(name); updateUI();
-        toast("\"" + name + "\" desarquivada.");
-    }
+    // ── GERENCIAMENTO DE MATÉRIAS (os diálogos ficam no AreaDialogs) ─────────
 
     /** Tem sessão em andamento (cronômetro com tempo ou Pomodoro rodando)? */
     private boolean sessionInProgress() {
         return sw.hasTime() || sw.isRunning() || pomodoroActive();
-    }
-
-    /** Seleciona a área no combo só se não houver sessão contando: senão o tempo iria para a área errada. */
-    private void selectIfIdle(String area) {
-        if (!sessionInProgress()) subjectComboBox.setSelectedItem(area);
-    }
-
-    /** Arquivar/deletar a área da sessão em andamento faria o tempo ir para outra área. */
-    private boolean blockIfRunning(String area) {
-        if (sessionInProgress() && area.equals(subjectComboBox.getSelectedItem())) {
-            toast("Termine ou zere a sessão de \"" + area + "\" antes.");
-            return true;
-        }
-        return false;
-    }
-
-    private JComboBox<String> tipoCombo(String selectedKey) {
-        String[] itens = new String[TYPE_KEYS.length];
-        for (int i = 0; i < TYPE_KEYS.length; i++) itens[i] = TYPE_LABELS[i];
-        JComboBox<String> cb = new JComboBox<>(itens);
-        cb.setSelectedIndex(typeIndex(selectedKey));
-        cb.setFont(AppTheme.FONT_LABEL);
-        return cb;
-    }
-
-    private void editSubjectName(String old) {
-        if (old == null || !studyDataMap.containsKey(old)) return;
-        Object cur = subjectComboBox.getSelectedItem();   // a área do cronômetro não muda
-
-        JTextField fName = new JTextField(old, 18);
-        JComboBox<String> cbType = tipoCombo(typeOf(old));
-        JPanel panel = new JPanel(new GridBagLayout());
-        GridBagConstraints gc = new GridBagConstraints();
-        gc.insets = new Insets(4, 4, 4, 4); gc.anchor = GridBagConstraints.WEST;
-        addFormRow(panel, gc, 0, "Nome:", fName);
-        addFormRow(panel, gc, 1, "Tipo:", cbType);
-        int rr = JOptionPane.showConfirmDialog(this, panel, "Editar área",
-                JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
-        if (rr != JOptionPane.OK_OPTION) return;
-
-        areas.setType(old, TYPE_KEYS[Math.max(0, cbType.getSelectedIndex())]);
-
-        switch (areas.rename(old, Areas.cleanName(fName.getText()))) {
-            case EXISTS:
-                toast("Esse nome já existe!");
-                return;
-            case UNCHANGED:   // só o tipo pode ter mudado
-                refreshCombo(); subjectComboBox.setSelectedItem(cur); updateUI();
-                return;
-            case OK:
-                String nw = Areas.cleanName(fName.getText());
-                refreshCombo(); subjectComboBox.setSelectedItem(old.equals(cur) ? nw : cur);
-                saveChecklist(); saveSessions(); updateUI();   // sessões agora vão junto no rename
-        }
-    }
-
-    private void changeSubjectColor(String s) {
-        if (s == null || !studyDataMap.containsKey(s)) return;
-        Color c = JColorChooser.showDialog(this, "Cor de " + s, studyDataMap.get(s).getColor());
-        if (c != null) { studyDataMap.get(s).setColor(c); updateUI(); }
-    }
-
-    private void zeroOutSubjectTime(String s) {
-        if (s == null || !studyDataMap.containsKey(s)) return;
-        int mins = studyDataMap.get(s).getMinutes();
-        int r = JOptionPane.showConfirmDialog(this,
-                "Isto zera TODO o tempo acumulado de \"" + s + "\" (" + fmtHM(mins) + ").\n"
-              + "O histórico de sessões é mantido. Continuar?\n\n"
-              + "Para apenas reiniciar o cronômetro, use o botão \"Zerar\" na aba Cronômetro.",
-                "Zerar matéria", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
-        if (r == JOptionPane.YES_OPTION) { studyDataMap.get(s).setMinutes(0); updateUI(); toast("Tempo de \"" + s + "\" zerado."); }
-    }
-
-    private void archiveSubject(String s) {
-        if (s == null || !studyDataMap.containsKey(s) || blockIfRunning(s)) return;
-        if (!areas.canArchive(s)) { toast("Deixe ao menos uma matéria ativa."); return; }
-        int r = JOptionPane.showConfirmDialog(this,
-                "Arquivar \"" + s + "\"?\nEla sai da lista, mas o tempo e o histórico são mantidos.\n"
-              + "Para reativar, use \"Reativar\" na tela Áreas.",
-                "Arquivar matéria", JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE);
-        if (r != JOptionPane.YES_OPTION) return;
-        archived.add(s);
-        refreshCombo(); updateUI();
-        toast("\"" + s + "\" arquivada.");
-    }
-
-    private void deleteSubject(String s) {
-        if (s == null || !studyDataMap.containsKey(s) || blockIfRunning(s)) return;
-        if (!areas.canDelete(s)) { toast("Deixe ao menos uma área ativa."); return; }
-        int r =JOptionPane.showConfirmDialog(this, "Deletar \"" + s + "\"? Todo o tempo será perdido.", "Deletar Matéria", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
-        if (r == JOptionPane.YES_OPTION) { areas.delete(s); saveChecklist(); refreshCombo(); updateUI(); }
     }
 
     // ── HISTÓRICO ───────────────────────────────────────────────────────────
@@ -1488,49 +1373,6 @@ public class StudyTracker extends JFrame {
     private static int typeIndexKnown(String key) {
         for (int i = 0; i < TYPE_KEYS.length; i++) if (TYPE_KEYS[i].equals(key)) return i;
         return -1;
-    }
-
-    /** Diálogo para editar os sub-focos de uma área (um por linha). */
-    private void showSubFocosDialog(String area) {
-        String tipo = typeOf(area);
-        java.util.List<String> atuais = subFocos.getOrDefault(area, new ArrayList<>());
-        JTextArea ta = new JTextArea(String.join("\n", atuais), 8, 22);
-        ta.setFont(AppTheme.FONT_LABEL);
-
-        JButton preset = new JButton("Usar sugestões de " + typeLabel(tipo));
-        preset.setFont(AppTheme.FONT_SMALL);
-        preset.setFocusPainted(false);
-        preset.setEnabled(subFocoPreset(tipo).length > 0);
-        preset.addActionListener(e -> {
-            java.util.LinkedHashSet<String> set = new java.util.LinkedHashSet<>();
-            for (String s : ta.getText().split("\n")) if (!s.trim().isEmpty()) set.add(s.trim());
-            java.util.Collections.addAll(set, subFocoPreset(tipo));
-            ta.setText(String.join("\n", set));
-        });
-
-        JPanel panel = new JPanel(new BorderLayout(0, 8));
-        JLabel h = dlgLabel("Sub-focos de \"" + area + "\" — um por linha", true);
-        panel.add(h, BorderLayout.NORTH);
-        panel.add(new JScrollPane(ta), BorderLayout.CENTER);
-        JPanel south = new JPanel(new BorderLayout());
-        south.add(dlgHint("Ex.: tópicos da prova, grupos musculares, hobbies."), BorderLayout.NORTH);
-        JPanel pr = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 4)); pr.add(preset);
-        south.add(pr, BorderLayout.SOUTH);
-        panel.add(south, BorderLayout.SOUTH);
-
-        int r = JOptionPane.showConfirmDialog(this, panel, "Sub-focos",
-                JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
-        if (r != JOptionPane.OK_OPTION) return;
-
-        java.util.List<String> nova = new ArrayList<>();
-        java.util.Set<String> vistos = new java.util.HashSet<>();
-        for (String line : ta.getText().split("\n")) {
-            String v = AppTheme.semHtml(line.replace('|', '/').trim());
-            if (!v.isEmpty() && vistos.add(v.toLowerCase())) nova.add(v);
-        }
-        if (nova.isEmpty()) subFocos.remove(area); else subFocos.put(area, nova);
-        saveData();
-        toast("Sub-focos de \"" + area + "\" atualizados.");
     }
 
     // ── PERSISTÊNCIA ────────────────────────────────────────────────────────
